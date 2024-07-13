@@ -468,7 +468,7 @@ const BASE_URL = 'https://mangaplus.shueisha.co.jp';
 const API_URL = 'https://jumpg-webapi.tokyo-cdn.com/api';
 const langCode = MangaPlusHelper_1.Language.ENGLISH;
 exports.MangaPlusInfo = {
-    version: '2.0.1',
+    version: '2.0.3',
     name: 'MangaPlus',
     icon: 'icon.png',
     author: 'Rinto-kun',
@@ -489,11 +489,13 @@ class MangaPlus {
                 interceptRequest: async (request) => {
                     request.headers = {
                         ...(request.headers ?? {}),
-                        ...{
-                            'Referer': `${BASE_URL}/`,
-                            'user-agent': await this.requestManager.getDefaultUserAgent()
-                        }
+                        'Referer': `${BASE_URL}/`,
+                        'user-agent': await this.requestManager.getDefaultUserAgent()
                     };
+                    if (request.url.startsWith('imageMangaId=')) {
+                        const mangaId = request.url.replace('imageMangaId=', '');
+                        request.url = await this.getThumbnailUrl(mangaId);
+                    }
                     return request;
                 },
                 interceptResponse: async (response) => {
@@ -527,16 +529,25 @@ class MangaPlus {
     getMangaShareUrl(mangaId) { return `${BASE_URL}/titles/${mangaId}`; }
     async getMangaDetails(mangaId) {
         const request = App.createRequest({
-            url: `${API_URL}/title_detail?title_id=${mangaId}&format=json`,
+            url: `${API_URL}/title_detailV3?title_id=${mangaId}&format=json`,
             method: 'GET'
         });
         const response = await this.requestManager.schedule(request, 1);
         const result = MangaPlusHelper_1.TitleDetailView.fromJson(response.data);
         return result.toSourceManga();
     }
+    async getThumbnailUrl(mangaId) {
+        const request = App.createRequest({
+            url: `${API_URL}/title_detailV3?title_id=${mangaId}&format=json`,
+            method: 'GET'
+        });
+        const response = await this.requestManager.schedule(request, 1);
+        const result = MangaPlusHelper_1.TitleDetailView.fromJson(response.data);
+        return result.title?.portraitImageUrl ?? '';
+    }
     async getChapters(mangaId) {
         const request = App.createRequest({
-            url: `${API_URL}/title_detail?title_id=${mangaId}&format=json`,
+            url: `${API_URL}/title_detailV3?title_id=${mangaId}&format=json`,
             method: 'GET'
         });
         const response = await this.requestManager.schedule(request, 1);
@@ -565,7 +576,7 @@ class MangaPlus {
     }
     async getFeaturedTitles() {
         const request = App.createRequest({
-            url: `${API_URL}/featured?lang=eng&format=json`,
+            url: `${API_URL}/featuredV2?lang=eng&clang=eng&format=json`,
             method: 'GET'
         });
         const response = await this.requestManager.schedule(request, 1);
@@ -574,7 +585,7 @@ class MangaPlus {
             throw new Error(result.error?.langPopup(MangaPlusHelper_1.Language.ENGLISH)?.body ?? 'Unknown error');
         }
         const languages = await (0, MangaPlusSettings_1.getLanguages)(this.stateManager);
-        const results = result.success?.featuredTitlesView?.contents.find(x => x.titleList && x.titleList.listName == 'WEEKLY SHONEN JUMP')?.titleList.featuredTitles
+        const results = result.success?.featuredTitlesViewV2?.contents?.find(x => x.titleList && x.titleList.listName == 'WEEKLY SHONEN JUMP')?.titleList.featuredTitles
             .filter((title) => languages.includes(title.language ?? MangaPlusHelper_1.Language.ENGLISH));
         const titles = [];
         const collectedIds = [];
@@ -628,7 +639,7 @@ class MangaPlus {
     async getLatestUpdates() {
         function latestUpdatesRequest() {
             return App.createRequest({
-                url: `${API_URL}/web/web_homeV3?lang=eng&format=json`,
+                url: `${API_URL}/web/web_homeV4?lang=eng&format=json`,
                 method: 'GET'
             });
         }
@@ -639,7 +650,7 @@ class MangaPlus {
             throw new Error(result.error?.langPopup(langCode)?.body ?? 'Unknown error');
         }
         const languages = await (0, MangaPlusSettings_1.getLanguages)(this.stateManager);
-        const results = result.success.webHomeViewV3?.groups
+        const results = result.success.webHomeViewV4?.groups
             .flatMap(ex => ex.titleGroups)
             .flatMap(ex => ex.titles)
             .map(title => title.title)
@@ -803,6 +814,7 @@ class TitleDetailView {
         this.nextTimeStamp = 0;
         this.viewingPeriodDescription = '';
         this.nonAppearanceInfo = '';
+        this.chapterListGroup = [];
         this.firstChapterList = [];
         this.lastChapterList = [];
         this.isSimulReleased = false;
@@ -855,8 +867,8 @@ class TitleDetailView {
         obj.nextTimeStamp = json.nextTimeStamp;
         obj.viewingPeriodDescription = json.viewingPeriodDescription;
         obj.nonAppearanceInfo = json.nonAppearanceInfo;
-        obj.firstChapterList = json.firstChapterList?.map(chapter => Object.assign(new Chapter(1, 1, '', 1, 1), chapter));
-        obj.lastChapterList = json.lastChapterList?.map(chapter => Object.assign(new Chapter(1, 1, '', 1, 1), chapter));
+        obj.firstChapterList = json.chapterListGroup?.flatMap(a => a.firstChapterList ?? []).map(chapter => Object.assign(new Chapter(1, 1, '', 1, 1), chapter));
+        obj.lastChapterList = json.chapterListGroup?.flatMap(a => a.lastChapterList ?? []).map(chapter => Object.assign(new Chapter(1, 1, '', 1, 1), chapter));
         return obj;
     }
     toSourceManga() {
@@ -864,7 +876,7 @@ class TitleDetailView {
         return App.createSourceManga({
             id: this.title?.titleId.toString() ?? '',
             mangaInfo: App.createMangaInfo({
-                image: this.title?.portraitImageUrl ?? '',
+                image: 'imageMangaId=' + this.title?.titleId,
                 titles: [this.title?.name ?? ''],
                 author: authors ? authors[0]?.trimEnd() : this.title?.author ?? '',
                 artist: authors ? authors[1]?.trimStart() : this.title?.author ?? '',
