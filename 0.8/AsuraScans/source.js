@@ -3699,7 +3699,7 @@ var _Sources = (() => {
     let insideStringLiteral = false;
     let endIndex = startIndex;
     for (let i = startIndex; i < text.length; i++) {
-      if (text[i] === '"') insideStringLiteral = !insideStringLiteral;
+      if (text[i] === '"' && text[i - 1] !== "\\") insideStringLiteral = !insideStringLiteral;
       if (!insideStringLiteral) {
         if (text[i] === "{" || text[i] === "[") {
           openBraces++;
@@ -3713,7 +3713,11 @@ var _Sources = (() => {
         break;
       }
     }
-    return `{${text.substring(startIndex, endIndex)}}`;
+    const finalText = text.substring(startIndex, endIndex);
+    if (!finalText) {
+      return "";
+    }
+    return `{${finalText}}`;
   }
 
   // src/AsuraScans/AsuraScansParser.ts
@@ -4062,7 +4066,7 @@ var _Sources = (() => {
   var ASURASCANS_DOMAIN = "https://asuracomic.net";
   var ASURASCANS_API_DOMAIN = "https://gg.asuracomic.net";
   var AsuraScansInfo = {
-    version: "4.0.1",
+    version: "4.0.2",
     name: "AsuraScans",
     description: "Extension that pulls manga from AsuraScans",
     author: "Seyden",
