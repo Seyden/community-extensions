@@ -4062,7 +4062,7 @@ var _Sources = (() => {
   var ASURASCANS_DOMAIN = "https://asuracomic.net";
   var ASURASCANS_API_DOMAIN = "https://gg.asuracomic.net";
   var AsuraScansInfo = {
-    version: "4.0.0",
+    version: "4.0.1",
     name: "AsuraScans",
     description: "Extension that pulls manga from AsuraScans",
     author: "Seyden",
@@ -4188,8 +4188,14 @@ var _Sources = (() => {
           ...DefaultHomeSectionData,
           section: createHomeSection("latest_update", "Latest Updates", false),
           selectorFunc: ($) => $("div.w-full", $("h3:contains(Latest Updates)")?.parent()?.next()),
-          titleSelectorFunc: ($, element) => $("span", element).text().trim(),
-          subtitleSelectorFunc: ($, element) => $("span", element).next().first().text().trim(),
+          titleSelectorFunc: ($, element) => $("span.font-medium", element).text().trim(),
+          subtitleSelectorFunc: ($, element) => {
+            let obj = $("div.text-sm", element).first();
+            let hiddenObj = $("div.hidden", obj);
+            if (hiddenObj.length != 0)
+              return hiddenObj.text().trim();
+            return obj.text().trim();
+          },
           getViewMoreItemsFunc: (page) => `page/${page}`,
           sortIndex: 20
         },
@@ -4232,7 +4238,7 @@ var _Sources = (() => {
     }
     async getAndSetBaseUrl() {
       let url = await this.stateManager.retrieve("Domain") ?? this.baseUrl;
-      this.finalUrl = url;
+      this.finalUrl = url.replace(/\/*$/, "");
       return url;
     }
     async getMangaSlug(mangaId) {
@@ -4331,10 +4337,9 @@ var _Sources = (() => {
       const url = await this.getAndSetBaseUrl();
       let urlBuilder = new URLBuilder(url).addPathComponent(this.sourceTraversalPathName).addQueryParameter("page", page.toString());
       if (query?.title) {
-        urlBuilder = urlBuilder.addQueryParameter("s", encodeURIComponent(query?.title.replace(/[’–][a-z]*/g, "") ?? ""));
-      } else {
-        urlBuilder = urlBuilder.addQueryParameter("genres", getFilterTagsBySection("genres", query?.includedTags)).addQueryParameter("status", getIncludedTagBySection("status", query?.includedTags)).addQueryParameter("types", getIncludedTagBySection("type", query?.includedTags)).addQueryParameter("order", getIncludedTagBySection("order", query?.includedTags));
+        urlBuilder = urlBuilder.addQueryParameter("name", encodeURIComponent(query?.title.replace(/[’–][a-z]*/g, "") ?? ""));
       }
+      urlBuilder = urlBuilder.addQueryParameter("genres", getFilterTagsBySection("genres", query?.includedTags)).addQueryParameter("status", getIncludedTagBySection("status", query?.includedTags)).addQueryParameter("types", getIncludedTagBySection("type", query?.includedTags)).addQueryParameter("order", getIncludedTagBySection("order", query?.includedTags));
       return App.createRequest({
         url: urlBuilder.buildUrl({
           addTrailingSlash: false,
