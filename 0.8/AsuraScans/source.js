@@ -3844,16 +3844,16 @@ var _Sources = (() => {
     }
     parseChapterDetails($, mangaId, chapterId) {
       const data = $.html();
-      const pages = [];
+      const pages = /* @__PURE__ */ new Set();
       const matches = data.matchAll(/(https:\/\/gg\.asuracomic\.net\/storage\/comics\/[^"\\]+)/gi);
       for (const match of Array.from(matches)) {
         const url = match[1] ?? "";
-        pages.push(url);
+        pages.add(url);
       }
       return App.createChapterDetails({
         id: chapterId,
         mangaId,
-        pages
+        pages: [...pages]
       });
     }
     parseTags(data) {
@@ -4066,7 +4066,7 @@ var _Sources = (() => {
   var ASURASCANS_DOMAIN = "https://asuracomic.net";
   var ASURASCANS_API_DOMAIN = "https://gg.asuracomic.net";
   var AsuraScansInfo = {
-    version: "4.0.2",
+    version: "4.0.3",
     name: "AsuraScans",
     description: "Extension that pulls manga from AsuraScans",
     author: "Seyden",
