@@ -2,7 +2,7 @@
     private rawContent: string
     private mappedData: Map<string, string>
     private propertyToKeyCache: Map<string, string>
-    constructor($: CheerioStatic, rememberKeyForProperties: string[] | null) {
+    constructor($: CheerioStatic, rememberKeyForProperties: string[] | null = null) {
         this.mappedData = new Map()
         this.propertyToKeyCache = new Map()
         this.rawContent = ''

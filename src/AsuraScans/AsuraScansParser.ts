@@ -17,7 +17,7 @@ import {
 } from './AsuraScansInterfaces'
 import { NextJSParser } from './NextJSParser'
 
-export class DevAsuraScansParser {
+export class AsuraScansParser {
     async parseMangaDetails(data: string, mangaId: string, source: any): Promise<SourceManga> {
         const $ = source.cheerio.load(data, { _useHtmlParser2: true })
         const nextJSParser = new NextJSParser($)

@@ -23,7 +23,7 @@ import {
 
 import { parse } from 'url'
 
-import { DevAsuraScansParser } from './DevAsuraScansParser'
+import { AsuraScansParser } from './AsuraScansParser'
 import { URLBuilder } from './UrlBuilder'
 import {
     createHomeSection,
@@ -101,7 +101,7 @@ export class DevAsuraScans implements ChapterProviding, HomePageSectionsProvidin
         })
     })
 
-    parser = new DevAsuraScansParser()
+    parser = new AsuraScansParser()
 
     // ----REQUEST MANAGER----
     requestManager = App.createRequestManager({
