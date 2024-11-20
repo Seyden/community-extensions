@@ -43,39 +43,3 @@ export function getFilterTagsBySection(section: string, tags: Tag[]): string[] {
 export function isImgLink(url: string) {
     return(url.match(/^http[^\?]*.(jpg|jpeg|gif|png|tiff|bmp)(\?(.*))?$/gmi) != null);
 }
-
-export function extractMangaData(text: string, node: string) {
-
-    const startIndex = text.indexOf(`\"${node}\":`);
-    if (startIndex === -1) return null;
-
-    let openBraces = 0;
-    let closeBraces = 0;
-    let insideStringLiteral = false;
-    let endIndex = startIndex;
-
-    for (let i = startIndex; i < text.length; i++) {
-        if (text[i] === '"' && text[i-1] !== '\\') insideStringLiteral = !insideStringLiteral
-
-        if (!insideStringLiteral) {
-            if (text[i] === '{' || text[i] === '[') {
-                openBraces++;
-            }
-            if (text[i] === '}' || text[i] === ']') {
-                closeBraces++;
-            }
-        }
-
-        if (openBraces > 0 && openBraces === closeBraces) {
-            endIndex = i + 1;
-            break;
-        }
-    }
-
-    const finalText = text.substring(startIndex, endIndex)
-    if (!finalText) {
-        return ''
-    }
-
-    return `{${finalText}}`;
-}

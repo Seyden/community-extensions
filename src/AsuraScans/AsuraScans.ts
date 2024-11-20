@@ -23,7 +23,7 @@ import {
 
 import { parse } from 'url'
 
-import { AsuraScansParser } from './AsuraScansParser'
+import { DevAsuraScansParser } from './DevAsuraScansParser'
 import { URLBuilder } from './UrlBuilder'
 import {
     createHomeSection,
@@ -48,7 +48,7 @@ const ASURASCANS_DOMAIN = 'https://asuracomic.net'
 const ASURASCANS_API_DOMAIN = 'https://gg.asuracomic.net'
 
 export const AsuraScansInfo: SourceInfo = {
-    version: '4.2.1',
+    version: '5.0.0',
     name: 'AsuraScans',
     description: 'Extension that pulls manga from AsuraScans',
     author: 'Seyden',
@@ -60,7 +60,7 @@ export const AsuraScansInfo: SourceInfo = {
     sourceTags: []
 }
 
-export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, MangaProviding, SearchResultsProviding {
+export class DevAsuraScans implements ChapterProviding, HomePageSectionsProviding, MangaProviding, SearchResultsProviding {
 
     constructor(public cheerio: CheerioAPI) { }
 
@@ -101,7 +101,7 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
         })
     })
 
-    parser = new AsuraScansParser()
+    parser = new DevAsuraScansParser()
 
     // ----REQUEST MANAGER----
     requestManager = App.createRequestManager({
@@ -343,7 +343,7 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
         const chapterLink: string = await this.getChapterSlug(mangaId, chapterId)
         const url: string = await this.getBaseUrl()
         const data = await this.loadRequestData(`${url}/${chapterLink}/`)
-        const $ = this.cheerio.load(data)
+        const $ = this.cheerio.load(data, { _useHtmlParser2: true })
 
         return this.parser.parseChapterDetails($, mangaId, chapterId)
     }

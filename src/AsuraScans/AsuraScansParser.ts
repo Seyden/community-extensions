@@ -8,7 +8,6 @@ import {
 } from '@paperback/types'
 
 import {
-    extractMangaData,
     HomeSectionData
 } from './AsuraScansHelper'
 
@@ -16,34 +15,37 @@ import entities = require('entities')
 import {
     Filters
 } from './AsuraScansInterfaces'
+import { NextJSParser } from './NextJSParser'
 
-export class AsuraScansParser {
+export class DevAsuraScansParser {
     async parseMangaDetails(data: string, mangaId: string, source: any): Promise<SourceManga> {
-        const obj = extractMangaData(data.replace(/\\"/g, '"').replace(/\\\\"/g, '\\"'), 'comic') ?? ''
-        if (obj == '') {
-            throw new Error(`Failed to parse comic object for manga ${mangaId}`) // If null, throw error, else parse data to json.
-        }
-
         const $ = source.cheerio.load(data, { _useHtmlParser2: true })
-
-        const comicObj = JSON.parse(obj)
+        const nextJSParser = new NextJSParser($)
+        const comicKey = nextJSParser.getReferenceKeyForProperty('comic')
+        if (!comicKey) {
+            throw new Error(`Failed to retrieve the comic key for manga ${mangaId}`)
+        }
+        const comic = nextJSParser.getObjectByKey(comicKey)
 
         const titles: string[] = []
-        titles.push(comicObj.comic.name.trim())
+        titles.push(comic.name.trim())
 
-        const author = comicObj.comic.author?.trim()
-        const artist = comicObj.comic.artist?.trim()
-        const image = comicObj.comic.thumb
-        const covers = [comicObj.comic.cover]
-        const description = this.decodeHTMLEntity($('span.font-medium').text().trim().replace(/\\r\\n/gm, '\n'))
-        const rating = comicObj.comic.rating
+        const author = comic.author?.trim()
+        const artist = comic.artist?.trim()
+        const image = comic.thumb
+        const covers = [comic.cover]
+        let description = comic.summary.trim()
+        if (description != '') {
+            description = this.decodeHTMLEntity(source.cheerio.load(description).text().replace(/\\r\\n/gm, '\n'))
+        }
+        const rating = comic.rating
 
-        const slug = comicObj.comic.slug?.trim()
+        const slug = comic.slug?.trim()
         if (slug) {
             await source.setMangaSlug(mangaId, `series/${slug}`)
         }
 
-        const rawStatus = comicObj.comic?.status?.name?.trim() ?? ''
+        const rawStatus = comic.status?.name?.trim() ?? ''
         let status
         switch (rawStatus.toLowerCase()) {
             case source.manga_StatusTypes.DROPPED.toLowerCase():
@@ -73,7 +75,7 @@ export class AsuraScansParser {
             App.createTagSection({
                 id: '0',
                 label: 'genres',
-                tags: comicObj.comic.genres.map((tag: any) => App.createTag({ id: `genres:${tag.id.toString()}`, label: tag.name }))
+                tags: comic.genres.map((tag: any) => App.createTag({ id: `genres:${tag.id.toString()}`, label: tag.name }))
             })
         ]
 
@@ -94,22 +96,22 @@ export class AsuraScansParser {
     }
 
     async parseChapterList(data: string, mangaId: string, source: any): Promise<Chapter[]> {
-        const tempData = data.replace(/\\"/g, '"').replace(/\\\\"/g, '\\"')
-        let obj = extractMangaData(tempData, 'comic') ?? ''
-        if (obj == '') {
-            throw new Error(`Failed to parse comic object for manga ${mangaId}`) // If null, throw error, else parse data to json.
+        const $ = source.cheerio.load(data, { _useHtmlParser2: true })
+        const nextJSParser = new NextJSParser($, ["chapters", "comic"])
+        const chapterKey = nextJSParser.getKeyForProperty('chapters')
+        if (!chapterKey) {
+            throw new Error(`Failed to retrieve the chapter key for manga ${mangaId}`)
         }
 
-        const comicObj = JSON.parse(obj)
-
-        obj = extractMangaData(tempData, 'chapters') ?? ''
-        if (obj == '') {
-            throw new Error(`Failed to parse chapters object for manga ${mangaId}`) // If null, throw error, else parse data to json.
+        const comicKey = nextJSParser.getKeyForProperty('comic')
+        if (!comicKey) {
+            throw new Error(`Failed to retrieve the comic key for manga ${mangaId}`)
         }
 
-        const chaptersObj = JSON.parse(obj)
+        const comic = nextJSParser.getObjectByKey(comicKey)
+        const rawChapters = nextJSParser.getObjectByKey(chapterKey)
 
-        const slug = comicObj.comic.slug?.trim()
+        const slug = comic.slug?.trim()
         let mangaUrl = ''
         if (slug) {
             mangaUrl = `series/${slug}`
@@ -122,7 +124,7 @@ export class AsuraScansParser {
 
         const chapters: Chapter[] = []
         let sortingIndex = 0
-        for (const chapter of chaptersObj.chapters.reverse()) {
+        for (const chapter of rawChapters[3].chapters.reverse()) {
             const id = chapter.id.toString()
             if (!id || typeof id === 'undefined') {
                 throw new Error(`Could not parse out ID when getting chapters for postId:${mangaId}`)
@@ -155,13 +157,17 @@ export class AsuraScansParser {
     }
 
     parseChapterDetails($: CheerioStatic, mangaId: string, chapterId: string): ChapterDetails {
-        const pages: string[] = []
-
-        for (const img of $('img', 'div.py-8.-mx-5').toArray()) {
-            const image = $(img).attr('src') ?? ''
-            if (!image) continue
-            pages.push(image.trim())
+        const nextJSParser = new NextJSParser($)
+        const key = nextJSParser.getReferenceKeyForProperty('pages')
+        if (!key) {
+            throw new Error(`Failed to parse chapter pages for manga ${mangaId}`)
         }
+
+        const pagesObj = nextJSParser.getObjectByKey(key)
+
+        const pages = pagesObj
+            .sort((x: any) => x.order)
+            .map((x: any) => x.url)
 
         return App.createChapterDetails({
             id: chapterId,
