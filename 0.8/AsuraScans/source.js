@@ -4414,8 +4414,8 @@ var _Sources = (() => {
   // src/AsuraScans/AsuraScans.ts
   var AsuraScans_exports = {};
   __export(AsuraScans_exports, {
-    AsuraScansInfo: () => AsuraScansInfo,
-    DevAsuraScans: () => DevAsuraScans
+    AsuraScans: () => AsuraScans,
+    AsuraScansInfo: () => AsuraScansInfo
   });
   var import_types2 = __toESM(require_lib());
   var import_url = __toESM(require_url());
@@ -4944,7 +4944,7 @@ var _Sources = (() => {
   var ASURASCANS_DOMAIN = "https://asuracomic.net";
   var ASURASCANS_API_DOMAIN = "https://gg.asuracomic.net";
   var AsuraScansInfo = {
-    version: "5.0.0",
+    version: "5.0.1",
     name: "AsuraScans",
     description: "Extension that pulls manga from AsuraScans",
     author: "Seyden",
@@ -4955,7 +4955,7 @@ var _Sources = (() => {
     intents: import_types2.SourceIntents.MANGA_CHAPTERS | import_types2.SourceIntents.HOMEPAGE_SECTIONS | import_types2.SourceIntents.CLOUDFLARE_BYPASS_REQUIRED | import_types2.SourceIntents.SETTINGS_UI,
     sourceTags: []
   };
-  var DevAsuraScans = class {
+  var AsuraScans = class {
     constructor(cheerio) {
       this.cheerio = cheerio;
       this.stateManager = App.createSourceStateManager();
