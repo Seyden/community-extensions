@@ -48,7 +48,7 @@ const ASURASCANS_DOMAIN = 'https://asuracomic.net'
 const ASURASCANS_API_DOMAIN = 'https://gg.asuracomic.net'
 
 export const AsuraScansInfo: SourceInfo = {
-    version: '5.0.0',
+    version: '5.0.1',
     name: 'AsuraScans',
     description: 'Extension that pulls manga from AsuraScans',
     author: 'Seyden',
@@ -60,7 +60,7 @@ export const AsuraScansInfo: SourceInfo = {
     sourceTags: []
 }
 
-export class DevAsuraScans implements ChapterProviding, HomePageSectionsProviding, MangaProviding, SearchResultsProviding {
+export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, MangaProviding, SearchResultsProviding {
 
     constructor(public cheerio: CheerioAPI) { }
 
