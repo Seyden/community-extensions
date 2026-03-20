@@ -12,42 +12,93 @@ import {
 } from './AsuraScansHelper'
 
 import entities = require('entities')
-import {
-    Filters
-} from './AsuraScansInterfaces'
-import { NextJSParser } from './NextJSParser'
+import { parseAstroIsland } from './AstroIslandProps'
+
+export const browseFilterStatuses = [
+    { value: 'all', label: 'All' },
+    { value: 'ongoing', label: 'Ongoing' },
+    { value: 'completed', label: 'Completed' },
+    { value: 'hiatus', label: 'Hiatus' },
+    { value: 'dropped', label: 'Dropped' }
+]
+
+export const browseFilterTypes = [
+    { value: 'all', label: 'All' },
+    { value: 'manhwa', label: 'Manhwa' },
+    { value: 'manhua', label: 'Manhua' },
+    { value: 'manga', label: 'Mangatoon' }
+]
+
+export const browseFilterOrder = [
+    { value: 'update', label: 'Latest Update' },
+    { value: 'popular', label: 'Popular' },
+    { value: 'rating', label: 'Rating' },
+    { value: 'name', label: 'A-Z' },
+    { value: 'newest', label: 'Newest' }
+]
+
+/** Shape of DescriptionModal props after `AstroIslandProps.astroUnwrap`. */
+interface AstroMangaDetailsProps {
+    title: string
+    description: string
+    alternativeTitles: string
+    coverUrl: string
+    rating: number
+    status: string
+    author: string
+    artist: string
+    genres: { id: number; name: string; slug: string }[]
+}
+
+/** Chapter list island (prefix r19) after `AstroIslandProps.astroUnwrap`. */
+interface AstroChapterListProps {
+    chapters: {
+        id: number
+        slug: string
+        number: number
+        title?: string
+        published_at: string
+        series_slug: string
+    }[]
+    publicUrl?: string
+    seriesSlug?: string
+}
+
+/** Chapter reader island (prefix r1) after `AstroIslandProps.astroUnwrap`. */
+interface AstroChapterReaderProps {
+    pages: { url: string; width?: number; height?: number }[]
+    chapterId?: number
+}
 
 export class AsuraScansParser {
     async parseMangaDetails(data: string, mangaId: string, source: any): Promise<SourceManga> {
         const $ = source.cheerio.load(data, { _useHtmlParser2: true })
-        const nextJSParser = new NextJSParser($)
-        const comicKey = nextJSParser.getReferenceKeyForProperty('comic')
-        if (!comicKey) {
-            throw new Error(`Failed to retrieve the comic key for manga ${mangaId}`)
-        }
-        const comic = nextJSParser.getObjectByKey(comicKey)
+        const comic = parseAstroIsland<AstroMangaDetailsProps>(
+            $,
+            'r16',
+            `parse manga details for ${mangaId}`
+        )
 
-        const titles: string[] = []
-        titles.push(comic.name.trim())
+        const titles: string[] = [
+            comic.title.trim(),
+            ...comic.alternativeTitles.split('•').map((t) => t.trim()).filter(Boolean)
+        ]
 
-        const author = comic.author?.trim()
-        const artist = comic.artist?.trim()
-        const image = comic.thumb
-        const covers = [comic.cover]
-        let description = comic.summary.trim()
-        if (description != '') {
-            description = this.decodeHTMLEntity(source.cheerio.load(description).text().replace(/\\r\\n/gm, '\n'))
-        }
-        const rating = comic.rating
+        const description = this.decodeHTMLEntity(
+            $.load(comic.description.trim()).text().replace(/\\r\\n/gm, '\n')
+        )
 
-        const slug = comic.slug?.trim()
-        if (slug) {
-            await source.setMangaSlug(mangaId, `series/${slug}`)
-        }
+        try {
+            const p = $('link[rel=canonical]').attr('href')
+            const path = p ? new URL(p).pathname : ''
+            const pathSegments = path.split('/').filter((s) => s !== '')
+            const slug = pathSegments.length === 0 ? '' : pathSegments[pathSegments.length - 1]!
+            if (slug) await source.setMangaSlug(mangaId, slug)
+        } catch { /* invalid URL */ }
 
-        const rawStatus = comic.status?.name?.trim() ?? ''
-        let status
-        switch (rawStatus.toLowerCase()) {
+        const rawStatus = comic.status.trim().toLowerCase()
+        let status: string
+        switch (rawStatus) {
             case source.manga_StatusTypes.DROPPED.toLowerCase():
                 status = 'Dropped'
                 break
@@ -71,11 +122,15 @@ export class AsuraScansParser {
                 break
         }
 
+        const tags: Tag[] = comic.genres.map((g) =>
+            App.createTag({ id: `genres:${g.id}`, label: g.name })
+        )
+
         const tagSections: TagSection[] = [
             App.createTagSection({
                 id: '0',
                 label: 'genres',
-                tags: comic.genres.map((tag: any) => App.createTag({ id: `genres:${tag.id.toString()}`, label: tag.name }))
+                tags
             })
         ]
 
@@ -83,38 +138,41 @@ export class AsuraScansParser {
             id: mangaId,
             mangaInfo: App.createMangaInfo({
                 titles,
-                image: image || source.fallbackImage,
-                covers: covers,
+                image: comic.coverUrl || source.fallbackImage,
+                covers: [comic.coverUrl],
                 status,
-                author: author == '' ? 'Unknown' : author,
-                artist: artist == '' ? 'Unknown' : artist,
+                author: comic.author.trim() || 'Unknown',
+                artist: comic.artist.trim() || 'Unknown',
                 tags: tagSections,
                 desc: description,
-                rating: rating
+                rating: comic.rating
             })
         })
     }
 
     async parseChapterList(data: string, mangaId: string, source: any): Promise<Chapter[]> {
         const $ = source.cheerio.load(data, { _useHtmlParser2: true })
-        const nextJSParser = new NextJSParser($, ["chapters", "comic"])
-        const chapterKey = nextJSParser.getKeyForProperty('chapters')
-        if (!chapterKey) {
-            throw new Error(`Failed to retrieve the chapter key for manga ${mangaId}`)
+        const props = parseAstroIsland<AstroChapterListProps>(
+            $,
+            'r19',
+            `parse chapter list for manga ${mangaId}`
+        )
+        const list = props.chapters
+        if (!Array.isArray(list) || list.length === 0) {
+            throw new Error(`Failed to parse chapter list (empty chapters) for manga ${mangaId}`)
         }
 
-        const comicKey = nextJSParser.getKeyForProperty('comic')
-        if (!comicKey) {
-            throw new Error(`Failed to retrieve the comic key for manga ${mangaId}`)
-        }
+        const publicPath = (props.publicUrl ?? '')
+            .replace(/^\/+/, '')
+            .trim()
+        const seriesSlug = (props.seriesSlug ?? '').trim()
 
-        const comic = nextJSParser.getObjectByKey(comicKey)
-        const rawChapters = nextJSParser.getObjectByKey(chapterKey)
-
-        const slug = comic.slug?.trim()
         let mangaUrl = ''
-        if (slug) {
-            mangaUrl = `series/${slug}`
+        if (publicPath && !publicPath.includes('/chapter/')) {
+            mangaUrl = publicPath
+            await source.setMangaSlug(mangaId, mangaUrl)
+        } else if (seriesSlug) {
+            mangaUrl = `comics/${seriesSlug}`
             await source.setMangaSlug(mangaId, mangaUrl)
         }
 
@@ -124,24 +182,28 @@ export class AsuraScansParser {
 
         const chapters: Chapter[] = []
         let sortingIndex = 0
-        for (const chapter of rawChapters[3].chapters.reverse()) {
-            const id = chapter.id.toString()
-            if (!id || typeof id === 'undefined') {
+        for (const chapter of list) {
+            const id = chapter.id?.toString()
+            if (!id) {
                 throw new Error(`Could not parse out ID when getting chapters for postId:${mangaId}`)
             }
 
-            const title = chapter.title
-            const name = chapter.name
+            const slug = chapter.slug?.trim()
+            if (!slug) {
+                throw new Error(`Could not parse chapter slug for manga ${mangaId} chapter ${id}`)
+            }
+
+            const title = chapter.title?.trim()
             const publishedDate = chapter.published_at
-            const link = `${mangaUrl}/chapter/${name}`
+            const link = `${mangaUrl}/chapter/${slug}`
 
             await source.stateManager.store(`${mangaId}:${id}`, link)
 
             chapters.push({
                 id,
                 langCode: source.language,
-                chapNum: name,
-                name: !title ? `Chapter ${name}` : title,
+                chapNum: chapter.number,
+                name: title ? title : `Chapter ${chapter.number}`,
                 time: new Date(publishedDate),
                 sortingIndex,
                 volume: 0,
@@ -157,26 +219,29 @@ export class AsuraScansParser {
     }
 
     parseChapterDetails($: CheerioStatic, mangaId: string, chapterId: string): ChapterDetails {
-        const nextJSParser = new NextJSParser($)
-        const key = nextJSParser.getReferenceKeyForProperty('pages')
-        if (!key) {
-            throw new Error(`Failed to parse chapter pages for manga ${mangaId}`)
+        const props = parseAstroIsland<AstroChapterReaderProps>(
+            $,
+            'r1',
+            `parse chapter pages for ${mangaId}/${chapterId}`
+        )
+        const pageList = props.pages
+        if (!Array.isArray(pageList) || pageList.length === 0) {
+            throw new Error(`Failed to parse chapter pages (empty pages) for ${mangaId}/${chapterId}`)
         }
 
-        const pagesObj = nextJSParser.getObjectByKey(key)
-
-        const pages = pagesObj
-            .sort((x: any) => x.order)
-            .map((x: any) => x.url)
+        const pages = pageList.map((p) => p.url).filter(Boolean)
+        if (pages.length === 0) {
+            throw new Error(`Failed to parse chapter pages (no URLs) for ${mangaId}/${chapterId}`)
+        }
 
         return App.createChapterDetails({
             id: chapterId,
             mangaId,
-            pages: pages
+            pages
         })
     }
 
-    parseTags(filters: Filters): TagSection[] {
+    parseTags(genres: any[]): TagSection[] {
 
         // Predefined chapters tags
         const predefinedChaptersTags: Tag[] = [
@@ -196,9 +261,9 @@ export class AsuraScansParser {
         ]
 
         const createTags = (filterItems: any, prefix: string): Tag[] => {
-            return filterItems.map((item: { id: any; value: any; name: any }) => ({
-                id: `${prefix}:${item.id ?? item.value}`, // Use `id` or `value` for `order` items
-                label: item.name
+            return filterItems.map((item: { id: any; value: any; name: any; label: any }) => ({
+                id: `${prefix}:${item.id ?? item.value}`,
+                label: item.name ?? item.label ?? ''
             }))
         }
 
@@ -207,25 +272,25 @@ export class AsuraScansParser {
             App.createTagSection({
                 id: '0',
                 label: 'genres',
-                tags: createTags(filters.genres, 'genres').map(x => App.createTag(x))
+                tags: createTags(genres, 'genres').map(x => App.createTag(x))
             }),
             // Tag section for status
             App.createTagSection({
                 id: '1',
                 label: 'status',
-                tags: createTags(filters.statuses, 'status').map(x => App.createTag(x))
+                tags: createTags(browseFilterStatuses, 'status').map(x => App.createTag(x))
             }),
             // Tag section for types
             App.createTagSection({
                 id: '2',
                 label: 'type',
-                tags: createTags(filters.types, 'type').map(x => App.createTag(x))
+                tags: createTags(browseFilterTypes, 'type').map(x => App.createTag(x))
             }),
             // Tag section for order
             App.createTagSection({
                 id: '3',
                 label: 'order',
-                tags: createTags(filters.order.map(order => ({ id: order.value, name: order.name })), 'order').map(x => App.createTag(x))
+                tags: createTags(browseFilterOrder, 'order').map(x => App.createTag(x))
             }),
             // Predefined chapters tag section
             App.createTagSection({
@@ -237,35 +302,39 @@ export class AsuraScansParser {
         return tagSections
     }
 
-    async parseSearchResults($: CheerioSelector, source: any): Promise<any[]> {
-        const results: any[] = []
+    async parseSearchResults($: CheerioSelector, source: any): Promise<PartialSourceManga[]> {
+        const results: PartialSourceManga[] = []
 
-        const mangas = $('a', $('h3:contains(Series list)')?.parent()?.next()?.next())
-        if (!mangas.length) {
+        const cards = $('div.series-card')
+        if (!cards.length) {
             console.log('Unable to parse search results!')
             return results
         }
 
-        for (const manga of mangas.toArray()) {
-            const slug = $(manga).attr('href') ?? ''
-
+        for (const card of cards.toArray()) {
+            const $card = $(card)
+            const linkEl = $('a', $card)
+            const slug = linkEl.attr('href') ?? ''
             if (!slug) {
-                throw new Error(`Unable to parse slug (${slug})!`)
+                continue
             }
 
-            const image = this.getImageSrc($('img', manga))
-            const title = $('span.block', manga).text().trim()
-            const subtitle = $('span.block', manga)?.next()?.text().trim() ?? ''
-            const mangaId: string = this.idCleaner(slug ?? '')
+            const image = this.getImageSrc($('img', $card))
+            const title = $card.find('h3').first().text().trim()
+            const subtitle = $card.find('.text-xs').first().text()
+                .replace(/\s*Chapters\s*/gi, '')
+                .replace(/\s+/g, ' ')
+                .trim()
+            const mangaId: string = this.idCleaner(slug)
 
             await source.setMangaSlug(mangaId, slug)
 
-            results.push({
+            results.push(App.createPartialSourceManga({
                 mangaId,
                 image: image || source.fallbackImage,
                 title: this.decodeHTMLEntity(title),
                 subtitle: this.decodeHTMLEntity(subtitle)
-            })
+            }))
         }
 
         return results
@@ -319,7 +388,6 @@ export class AsuraScansParser {
                 console.log(`Failed to parse homepage sections for ${source.baseUrl} title (${title})`)
                 continue
             }
-
             const image = this.getImageSrc($('img', manga))
             const subtitle = section.subtitleSelectorFunc($, manga) ?? ''
             const href = $('a', manga).attr('href') ?? ''
@@ -343,15 +411,18 @@ export class AsuraScansParser {
         return items
     }
 
-    isLastPage = ($: CheerioStatic, id: string): boolean => {
-        let isLast = true
-        const obj = $('a:contains(Next)')
-        const hasNext = obj.attr('style')?.includes('pointer-events:auto') ?? false
-        if (hasNext) {
-            isLast = false
+    isLastPage = ($: CheerioStatic, _id: string): boolean => {
+        const nextPage = $('a[aria-label="Next page"]').first()
+        if (nextPage.length) {
+            const cls = nextPage.attr('class') ?? ''
+            const hasHref = !!nextPage.attr('href')
+            const disabled = cls.includes('pointer-events-none')
+            return !hasHref || disabled
         }
 
-        return isLast
+        const obj = $('a:contains(Next)')
+        const hasNext = obj.attr('style')?.includes('pointer-events:auto') ?? false
+        return !hasNext
     }
 
     protected getImageSrc(imageObj: Cheerio | undefined): string {

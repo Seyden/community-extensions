@@ -36,7 +36,7 @@ export function getIncludedTagBySection(section: string, tags: Tag[]): any {
 
 export function getFilterTagsBySection(section: string, tags: Tag[]): string[] {
     return tags?.filter((x: Tag) => x.id.startsWith(`${section}:`)).map((x: Tag) => {
-        return x.id.replace(`${section}:`, '')
+        return x.label.toLowerCase()
     })
 }
 

@@ -48,7 +48,7 @@ const ASURASCANS_DOMAIN = 'https://asuracomic.net'
 const ASURASCANS_API_DOMAIN = 'https://gg.asuracomic.net'
 
 export const AsuraScansInfo: SourceInfo = {
-    version: '5.0.1',
+    version: '6.0.0',
     name: 'AsuraScans',
     description: 'Extension that pulls manga from AsuraScans',
     author: 'Seyden',
@@ -179,7 +179,7 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
      * Eg. https://mangadark.com/manga/mashle-magic-and-muscles the pathname would be "manga"
      * Default = "manga"
      */
-    sourceTraversalPathName = 'series'
+    sourceTraversalPathName = 'browse'
 
     /**
      * Fallback image if no image is present
@@ -205,53 +205,23 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
 
     // ----HOMESCREEN SELECTORS----
 
-    sections: Record<'popular_today' | 'latest_update' | 'top_alltime' | 'top_monthly' | 'top_weekly', HomeSectionData> = {
-        'popular_today': {
+    sections: Record<'trending_today' | 'latest_update', HomeSectionData> = {
+        'trending_today': {
             ...DefaultHomeSectionData,
-            section: createHomeSection('popular_today', 'Popular Today', false, HomeSectionType.singleRowLarge),
-            selectorFunc: ($: CheerioStatic) => $('div.group', $('h3:contains(Popular Today)')?.parent()?.next()?.next()),
+            section: createHomeSection('trending_today', 'Trending Today', false, HomeSectionType.singleRowLarge),
+            selectorFunc: ($: CheerioStatic) => $('div.embla-trending__slide', $('h2:contains(Trending Today)')?.parent()?.next()?.next()),
             titleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span.block', element).text().trim(),
-            subtitleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span.block', element)?.next()?.text().trim(),
+            subtitleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span.block', element)?.next()?.first()?.text().trim(),
             sortIndex: 10
         },
         'latest_update': {
             ...DefaultHomeSectionData,
             section: createHomeSection('latest_update', 'Latest Updates', false),
-            selectorFunc: ($: CheerioStatic) => $('div.w-full', $('h3:contains(Latest Updates)')?.parent()?.next()),
-            titleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span.font-medium', element).text().trim(),
-            subtitleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => {
-                const obj = $('div.text-sm', element).first()
-                const hiddenObj = $('div.hidden', obj)
-                if (hiddenObj.length != 0)
-                    return hiddenObj.text().trim()
-                return obj.text().trim()
-            },
+            selectorFunc: ($: CheerioStatic) => $('div.grid', $("h2:contains(Latest Updates)").parent().next()),
+            titleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('a.text-base', element).first().text().trim(),
+            subtitleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span.font-medium', element).first().text().trim(),
             getViewMoreItemsFunc: (page: string) => `page/${page}`,
             sortIndex: 20
-        },
-        'top_alltime': {
-            ...DefaultHomeSectionData,
-            section: createHomeSection('top_alltime', 'Top All Time', false),
-            selectorFunc: ($: CheerioStatic) => $('li', $('div.serieslist.pop.wpop.wpop-alltime')),
-            subtitleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span a', element).toArray().map(x => $(x).text().trim()).join(', '),
-            sortIndex: 30,
-            enabled: false
-        },
-        'top_monthly': {
-            ...DefaultHomeSectionData,
-            section: createHomeSection('top_monthly', 'Top Monthly', false),
-            selectorFunc: ($: CheerioStatic) => $('li', $('div.serieslist.pop.wpop.wpop-monthly')),
-            subtitleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span a', element).toArray().map(x => $(x).text().trim()).join(', '),
-            sortIndex: 40,
-            enabled: false
-        },
-        'top_weekly': {
-            ...DefaultHomeSectionData,
-            section: createHomeSection('top_weekly', 'Top Weekly', false),
-            selectorFunc: ($: CheerioStatic) => $('li', $('div.serieslist.pop.wpop.wpop-weekly')),
-            subtitleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span a', element).toArray().map(x => $(x).text().trim()).join(', '),
-            sortIndex: 50,
-            enabled: false
         }
     }
 
@@ -350,9 +320,9 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
 
     async getSearchTags(): Promise<TagSection[]> {
         try {
-            const data = await this.loadRequestData(`${ASURASCANS_API_DOMAIN}/api/series/filters`)
-            return this.parser.parseTags(JSON.parse(data)
-            )
+            const data = await this.loadRequestData('https://api.asurascans.com/api/genres')
+            const { data: genres } = JSON.parse(data) as { data: any[] }
+            return this.parser.parseTags(genres)
         } catch (error) {
             throw new Error(error as any)
         }
@@ -389,31 +359,12 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
         const $ = this.cheerio.load(response.data as string, { _useHtmlParser2: true })
         const results = await this.parser.parseSearchResults($, this)
 
-        const chapterTag = query?.includedTags.find((x: Tag) => x.id.startsWith('chapters'))
-
-        const manga: PartialSourceManga[] = []
-        for (const result of results) {
-            if (chapterTag) {
-                const chapterCount = parseInt(chapterTag.id.replace('chapters:', ''))
-                const chapterCountRegex = result.subtitle?.match(/(\d+)/)
-                if (!chapterCountRegex || chapterCountRegex?.[1] && parseInt(chapterCountRegex[1]) < chapterCount)
-                    continue
-            }
-
-            manga.push(App.createPartialSourceManga({
-                mangaId: result.mangaId,
-                image: result.image,
-                title: result.title,
-                subtitle: result.subtitle
-            }))
-        }
-
         metadata = !this.parser.isLastPage($, query?.title ? 'search_request' : 'view_more')
             ? { page: page + 1 }
             : undefined
         return {
             metadata,
-            manga
+            manga: results
         }
     }
 
@@ -424,14 +375,15 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
             .addQueryParameter('page', page.toString())
 
         if (query?.title) {
-            urlBuilder = urlBuilder.addQueryParameter('name', encodeURIComponent(query?.title.replace(/[’‘´`'-][a-z]*/g, '%') ?? ''))
+            urlBuilder = urlBuilder.addQueryParameter('search', encodeURIComponent(query?.title.replace(/[’‘´`'-][a-z]*/g, '%') ?? ''))
         }
 
         urlBuilder = urlBuilder
             .addQueryParameter('genres', getFilterTagsBySection('genres', query?.includedTags))
             .addQueryParameter('status', getIncludedTagBySection('status', query?.includedTags))
-            .addQueryParameter('types', getIncludedTagBySection('type', query?.includedTags))
-            .addQueryParameter('order', getIncludedTagBySection('order', query?.includedTags))
+            .addQueryParameter('type', getIncludedTagBySection('type', query?.includedTags))
+            .addQueryParameter('sort', getIncludedTagBySection('order', query?.includedTags))
+            .addQueryParameter('min_chapters', getIncludedTagBySection('chapters', query?.includedTags))
 
         return App.createRequest({
             url: urlBuilder.buildUrl({
