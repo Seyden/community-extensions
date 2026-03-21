@@ -4907,8 +4907,8 @@ var _Sources = (() => {
           image: comic.coverUrl || source.fallbackImage,
           covers: [comic.coverUrl],
           status,
-          author: comic.author?.trim() || "Unknown",
-          artist: comic.artist?.trim() || "Unknown",
+          author: comic.author ? comic.author.trim() : "Unknown",
+          artist: comic.artist ? comic.artist.trim() : "Unknown",
           tags: tagSections,
           desc: description,
           rating: comic.rating
