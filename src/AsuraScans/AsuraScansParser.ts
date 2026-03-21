@@ -80,8 +80,7 @@ export class AsuraScansParser {
         )
 
         const titles: string[] = [
-            comic.title.trim(),
-            ...comic.alternativeTitles.split('•').map((t) => t.trim()).filter(Boolean)
+            comic.title.trim()
         ]
 
         const description = this.decodeHTMLEntity(
