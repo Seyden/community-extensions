@@ -4852,8 +4852,7 @@ var _Sources = (() => {
         `parse manga details for ${mangaId}`
       );
       const titles = [
-        comic.title.trim(),
-        ...comic.alternativeTitles.split("\u2022").map((t) => t.trim()).filter(Boolean)
+        comic.title.trim()
       ];
       const description = this.decodeHTMLEntity(
         $.load(comic.description.trim()).text().replace(/\\r\\n/gm, "\n")
