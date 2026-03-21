@@ -5246,9 +5246,9 @@ var _Sources = (() => {
   }
 
   // src/AsuraScans/AsuraScans.ts
-  var ASURASCANS_DOMAIN = "https://asuracomic.net";
+  var ASURASCANS_DOMAIN = "https://asurascans.com";
   var AsuraScansInfo = {
-    version: "6.0.0",
+    version: "6.0.1",
     name: "AsuraScans",
     description: "Extension that pulls manga from AsuraScans",
     author: "Seyden",
