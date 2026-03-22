@@ -4760,53 +4760,6 @@ var _Sources = (() => {
   var import_types2 = __toESM(require_lib());
   var import_url = __toESM(require_url());
 
-  // src/AsuraScans/AstroIslandProps.ts
-  function astroUnwrap(value) {
-    if (value === null || value === void 0) {
-      return value;
-    }
-    if (Array.isArray(value)) {
-      if (value.length === 2 && typeof value[0] === "number") {
-        const [tag, payload] = value;
-        if (tag === 0) {
-          return astroUnwrap(payload);
-        }
-        if (tag === 1 && Array.isArray(payload)) {
-          return payload.map((x) => astroUnwrap(x));
-        }
-      }
-      return value;
-    }
-    if (typeof value === "object") {
-      const out = {};
-      for (const [k, v] of Object.entries(value)) {
-        out[k] = astroUnwrap(v);
-      }
-      return out;
-    }
-    return value;
-  }
-  function readAstroIslandProps($, prefix) {
-    return $(`astro-island[prefix="${prefix}"]`).first().attr("props");
-  }
-  function parseAstroPropsJson(rawProps, errorLabel) {
-    try {
-      return JSON.parse(rawProps);
-    } catch {
-      throw new Error(`Failed to ${errorLabel} (invalid props JSON)`);
-    }
-  }
-  function parseAndUnwrapAstroProps(rawProps, errorLabel) {
-    return astroUnwrap(parseAstroPropsJson(rawProps, errorLabel));
-  }
-  function parseAstroIsland($, prefix, errorLabel) {
-    const rawProps = readAstroIslandProps($, prefix);
-    if (rawProps == null || rawProps === "") {
-      throw new Error(`Failed to ${errorLabel} (no astro island props)`);
-    }
-    return parseAndUnwrapAstroProps(rawProps, errorLabel);
-  }
-
   // src/AsuraScans/AsuraScansParser.ts
   var entities = require_lib3();
   var browseFilterStatuses = [
@@ -4845,26 +4798,33 @@ var _Sources = (() => {
       };
     }
     async parseMangaDetails(data, mangaId, source) {
-      const $ = source.cheerio.load(data, { _useHtmlParser2: true });
-      const comic = parseAstroIsland(
-        $,
-        "r16",
-        `parse manga details for ${mangaId}`
-      );
-      const titles = [
-        comic.title.trim()
-      ];
-      const description = this.decodeHTMLEntity(
-        $.load(comic.description.trim()).text().replace(/\\r\\n/gm, "\n")
-      );
+      let parsed;
       try {
-        const p = $("link[rel=canonical]").attr("href");
-        const path = p ? new URL(p).pathname : "";
-        const pathSegments = path.split("/").filter((s) => s !== "");
-        const slug = pathSegments.length === 0 ? "" : pathSegments[pathSegments.length - 1];
-        if (slug) await source.setMangaSlug(mangaId, slug);
+        parsed = JSON.parse(data);
       } catch {
+        throw new Error(`Failed to parse manga details (invalid JSON) for ${mangaId}`);
       }
+      const comic = parsed.series;
+      if (!comic) {
+        throw new Error(`Failed to parse manga details (missing series) for ${mangaId}`);
+      }
+      const titles = [comic.title.trim()];
+      if (comic.alt_titles?.length) {
+        for (const t of comic.alt_titles) {
+          const x = t.trim();
+          if (x && !titles.includes(x)) {
+            titles.push(x);
+          }
+        }
+      } else if (comic.alternative_titles) {
+        titles.push(
+          ...comic.alternative_titles.split("\u2022").map((t) => t.trim()).filter(Boolean).filter((t) => !titles.includes(t))
+        );
+      }
+      const $desc = source.cheerio.load(comic.description.trim(), { _useHtmlParser2: true });
+      const description = this.decodeHTMLEntity(
+        $desc.text().replace(/\r\n/gm, "\n")
+      );
       const rawStatus = comic.status.trim().toLowerCase();
       let status;
       switch (rawStatus) {
@@ -4890,7 +4850,8 @@ var _Sources = (() => {
           status = "Ongoing";
           break;
       }
-      const tags = comic.genres.map(
+      const genres = Array.isArray(comic.genres) ? comic.genres : [];
+      const tags = genres.map(
         (g) => App.createTag({ id: `genres:${g.id}`, label: g.name })
       );
       const tagSections = [
@@ -4900,15 +4861,17 @@ var _Sources = (() => {
           tags
         })
       ];
+      const author = comic.author?.trim() || "Unknown";
+      const artist = comic.artist?.trim() || "Unknown";
       return App.createSourceManga({
         id: mangaId,
         mangaInfo: App.createMangaInfo({
           titles,
-          image: comic.coverUrl || source.fallbackImage,
-          covers: [comic.coverUrl],
+          image: comic.cover || source.fallbackImage,
+          covers: [comic.cover],
           status,
-          //author: comic.author ? comic.author.trim() : 'Unknown',
-          //artist: comic.artist ? comic.artist.trim() : 'Unknown',
+          author,
+          artist,
           tags: tagSections,
           desc: description,
           rating: comic.rating
@@ -4916,28 +4879,18 @@ var _Sources = (() => {
       });
     }
     async parseChapterList(data, mangaId, source) {
-      const $ = source.cheerio.load(data, { _useHtmlParser2: true });
-      const props = parseAstroIsland(
-        $,
-        "r19",
-        `parse chapter list for manga ${mangaId}`
-      );
-      const list = props.chapters;
+      let parsed;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        throw new Error(`Failed to parse chapter list (invalid JSON) for manga ${mangaId}`);
+      }
+      const list = parsed.data;
       if (!Array.isArray(list) || list.length === 0) {
         throw new Error(`Failed to parse chapter list (empty chapters) for manga ${mangaId}`);
       }
-      const publicPath = (props.publicUrl ?? "").replace(/^\/+/, "").trim();
-      const seriesSlug = (props.seriesSlug ?? "").trim();
-      let mangaUrl = "";
-      if (publicPath && !publicPath.includes("/chapter/")) {
-        mangaUrl = publicPath;
-        await source.setMangaSlug(mangaId, mangaUrl);
-      } else if (seriesSlug) {
-        mangaUrl = `comics/${seriesSlug}`;
-        await source.setMangaSlug(mangaId, mangaUrl);
-      }
-      if (!mangaUrl) {
-        mangaUrl = await source.getMangaSlug(mangaId);
+      if (!list[0].series_slug?.trim()) {
+        throw new Error(`Could not resolve series slug for ${mangaId}`);
       }
       const chapters = [];
       let sortingIndex = 0;
@@ -4946,14 +4899,9 @@ var _Sources = (() => {
         if (!id) {
           throw new Error(`Could not parse out ID when getting chapters for postId:${mangaId}`);
         }
-        const slug = chapter.slug?.trim();
-        if (!slug) {
-          throw new Error(`Could not parse chapter slug for manga ${mangaId} chapter ${id}`);
-        }
         const title = chapter.title?.trim();
         const publishedDate = chapter.published_at;
-        const link = `${mangaUrl}/chapter/${slug}`;
-        await source.stateManager.store(`${mangaId}:${id}`, link);
+        await source.stateManager.store(`${mangaId}:${id}`, String(chapter.number));
         chapters.push({
           id,
           langCode: source.language,
@@ -4971,13 +4919,14 @@ var _Sources = (() => {
         return App.createChapter(chapter);
       });
     }
-    parseChapterDetails($, mangaId, chapterId) {
-      const props = parseAstroIsland(
-        $,
-        "r1",
-        `parse chapter pages for ${mangaId}/${chapterId}`
-      );
-      const pageList = props.pages;
+    parseChapterDetails(data, mangaId, chapterId) {
+      let parsed;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        throw new Error(`Failed to parse chapter JSON for ${mangaId}/${chapterId}`);
+      }
+      const pageList = parsed.data?.chapter?.pages;
       if (!Array.isArray(pageList) || pageList.length === 0) {
         throw new Error(`Failed to parse chapter pages (empty pages) for ${mangaId}/${chapterId}`);
       }
@@ -5065,7 +5014,6 @@ var _Sources = (() => {
         const title = $card.find("h3").first().text().trim();
         const subtitle = $card.find(".text-xs").first().text().replace(/\s*Chapters\s*/gi, "").replace(/\s+/g, " ").trim();
         const mangaId = this.idCleaner(slug);
-        await source.setMangaSlug(mangaId, slug);
         results.push(App.createPartialSourceManga({
           mangaId,
           image: image || source.fallbackImage,
@@ -5119,7 +5067,6 @@ var _Sources = (() => {
           console.log(`Failed to parse homepage sections for ${source.baseUrl} title (${title}) mangaId (${mangaId})`);
           continue;
         }
-        await source.setMangaSlug(mangaId, href);
         items.push(App.createPartialSourceManga({
           mangaId,
           image: image || source.fallbackImage,
@@ -5247,8 +5194,9 @@ var _Sources = (() => {
 
   // src/AsuraScans/AsuraScans.ts
   var ASURASCANS_DOMAIN = "https://asurascans.com";
+  var API_DOMAIN = "https://api.asurascans.com";
   var AsuraScansInfo = {
-    version: "6.0.2",
+    version: "6.0.3",
     name: "AsuraScans",
     description: "Extension that pulls manga from AsuraScans",
     author: "Seyden",
@@ -5422,31 +5370,21 @@ var _Sources = (() => {
       };
       return this.mangaDataRequests[mangaId]?.data;
     }
-    async getMangaSlug(mangaId) {
-      return await this.stateManager.retrieve(`${mangaId}:slug`);
-    }
-    async setMangaSlug(mangaId, link) {
-      await this.stateManager.store(`${mangaId}:slug`, link);
-    }
     //@ts-expect-error Force async function
     async getMangaShareUrl(mangaId) {
-      const slug = await this.getMangaSlug(mangaId);
-      if (!slug) {
-        throw new Error(`Couldn't find a url for mangaId ${mangaId}, try migrating the title or contact a developer!`);
-      }
       const url = await this.getBaseUrl();
-      return `${url}/${slug}`;
+      return `${url}/comics/${mangaId}`;
     }
     async getMangaData(mangaId) {
       const url = await this.getMangaShareUrl(mangaId);
       return await this.loadRequestData(url);
     }
     async getMangaDetails(mangaId) {
-      const data = await this.getMangaRequest(mangaId);
+      const data = await this.loadRequestData(`${API_DOMAIN}/api/series/${encodeURIComponent(mangaId)}`);
       return await this.parser.parseMangaDetails(data, mangaId, this);
     }
     async getChapters(mangaId) {
-      const data = await this.getMangaRequest(mangaId);
+      const data = await this.loadRequestData(`${API_DOMAIN}/api/series/${encodeURIComponent(mangaId)}/chapters`);
       const chapters = await this.parser.parseChapterList(data, mangaId, this);
       if (!Array.isArray(chapters) || chapters.length == 0) {
         throw new Error(`Couldn't find any chapters for mangaId ${mangaId}, throwing an error to prevent loosing reading progress`);
@@ -5458,23 +5396,25 @@ var _Sources = (() => {
       let existingMappedChapterLink = await this.stateManager.retrieve(chapterKey);
       if (existingMappedChapterLink == null) {
         await this.getChapters(mangaId);
+        existingMappedChapterLink = await this.stateManager.retrieve(chapterKey);
       }
-      existingMappedChapterLink = await this.stateManager.retrieve(chapterKey);
-      if (existingMappedChapterLink == null) {
+      if (existingMappedChapterLink != null && !/^\d+(\.\d+)?$/.test(existingMappedChapterLink.trim())) {
+        await this.getChapters(mangaId);
+        existingMappedChapterLink = await this.stateManager.retrieve(chapterKey);
+      }
+      if (existingMappedChapterLink == null || !/^\d+(\.\d+)?$/.test(existingMappedChapterLink.trim())) {
         throw new Error(`Could not parse out Chapter Link when getting chapter details for postId: ${mangaId} chapterId: ${chapterId}`);
       }
-      return existingMappedChapterLink;
+      return existingMappedChapterLink.trim();
     }
     async getChapterDetails(mangaId, chapterId) {
       const chapterLink = await this.getChapterSlug(mangaId, chapterId);
-      const url = await this.getBaseUrl();
-      const data = await this.loadRequestData(`${url}/${chapterLink}/`);
-      const $ = this.cheerio.load(data, { _useHtmlParser2: true });
-      return this.parser.parseChapterDetails($, mangaId, chapterId);
+      const data = await this.loadRequestData(`${API_DOMAIN}/api/series/${encodeURIComponent(mangaId)}/chapters/${encodeURIComponent(chapterLink)}`);
+      return this.parser.parseChapterDetails(data, mangaId, chapterId);
     }
     async getSearchTags() {
       try {
-        const data = await this.loadRequestData("https://api.asurascans.com/api/genres");
+        const data = await this.loadRequestData(`${API_DOMAIN}/api/genres`);
         const { data: genres } = JSON.parse(data);
         return this.parser.parseTags(genres);
       } catch (error) {
