@@ -38,6 +38,9 @@
         const processedProperties: Map<string, boolean> = new Map()
 
         this.rawContent.split('\n').forEach((data) => {
+            data.split(':').forEach((childData) => {
+
+            })
             const splitIndex = data.indexOf(':')
             if (splitIndex === -1) {
                 return

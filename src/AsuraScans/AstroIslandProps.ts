@@ -31,6 +31,10 @@ export function readAstroIslandProps($: CheerioPropsRoot, prefix: string): strin
     return $(`astro-island[prefix="${prefix}"]`).first().attr('props')
 }
 
+export function readAstroIslandPropsContaining($: CheerioPropsRoot, propsSubstring: string): string | undefined {
+    return $(`astro-island[props*="${propsSubstring}"]`).first().attr('props')
+}
+
 export function parseAstroPropsJson(rawProps: string, errorLabel: string): unknown {
     try {
         return JSON.parse(rawProps)
@@ -46,6 +50,19 @@ export function parseAndUnwrapAstroProps<T>(rawProps: string, errorLabel: string
 /** Read `props` from the first matching island, parse JSON, and {@link astroUnwrap}. */
 export function parseAstroIsland<T>($: CheerioPropsRoot, prefix: string, errorLabel: string): T {
     const rawProps = readAstroIslandProps($, prefix)
+    if (rawProps == null || rawProps === '') {
+        throw new Error(`Failed to ${errorLabel} (no astro island props)`)
+    }
+    return parseAndUnwrapAstroProps<T>(rawProps, errorLabel)
+}
+
+/** First `astro-island` whose `props` attribute contains `propsSubstring`. */
+export function parseAstroIslandByPropsContains<T>(
+    $: CheerioPropsRoot,
+    propsSubstring: string,
+    errorLabel: string
+): T {
+    const rawProps = readAstroIslandPropsContaining($, propsSubstring)
     if (rawProps == null || rawProps === '') {
         throw new Error(`Failed to ${errorLabel} (no astro island props)`)
     }

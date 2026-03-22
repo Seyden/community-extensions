@@ -12,7 +12,6 @@ import {
 } from './AsuraScansHelper'
 
 import entities = require('entities')
-import { parseAstroIsland } from './AstroIslandProps'
 
 export const browseFilterStatuses = [
     { value: 'all', label: 'All' },
@@ -37,63 +36,68 @@ export const browseFilterOrder = [
     { value: 'newest', label: 'Newest' }
 ]
 
-/** Shape of DescriptionModal props after `AstroIslandProps.astroUnwrap`. */
-interface AstroMangaDetailsProps {
+/** `GET /api/series/:slug` — `series` object (see [api.asurascans.com](https://api.asurascans.com/api/series/nano-machine)). */
+interface ApiSeriesDetail {
+    id: number
+    slug: string
     title: string
+    alt_titles?: string[]
+    alternative_titles?: string
     description: string
-    alternativeTitles: string
-    coverUrl: string
-    rating: number
+    cover: string
     status: string
-    author: string
-    artist: string
+    author?: string
+    artist?: string
+    rating: number
     genres: { id: number; name: string; slug: string }[]
 }
 
-/** Chapter list island (prefix r19) after `AstroIslandProps.astroUnwrap`. */
-interface AstroChapterListProps {
-    chapters: {
-        id: number
-        slug: string
-        number: number
-        title?: string
-        published_at: string
-        series_slug: string
-    }[]
-    publicUrl?: string
-    seriesSlug?: string
-}
-
-/** Chapter reader island (prefix r1) after `AstroIslandProps.astroUnwrap`. */
-interface AstroChapterReaderProps {
-    pages: { url: string; width?: number; height?: number }[]
-    chapterId?: number
+/** `GET /api/series/:slug/chapters` — each element of `data` ([example](https://api.asurascans.com/api/series/nano-machine/chapters)). */
+interface ApiChapterRow {
+    id: number
+    slug: string
+    number: number
+    title?: string
+    published_at: string
+    series_slug: string
 }
 
 export class AsuraScansParser {
     async parseMangaDetails(data: string, mangaId: string, source: any): Promise<SourceManga> {
-        const $ = source.cheerio.load(data, { _useHtmlParser2: true })
-        const comic = parseAstroIsland<AstroMangaDetailsProps>(
-            $,
-            'r16',
-            `parse manga details for ${mangaId}`
-        )
-
-        const titles: string[] = [
-            comic.title.trim()
-        ]
-
-        const description = this.decodeHTMLEntity(
-            $.load(comic.description.trim()).text().replace(/\\r\\n/gm, '\n')
-        )
-
+        let parsed: { series?: ApiSeriesDetail }
         try {
-            const p = $('link[rel=canonical]').attr('href')
-            const path = p ? new URL(p).pathname : ''
-            const pathSegments = path.split('/').filter((s) => s !== '')
-            const slug = pathSegments.length === 0 ? '' : pathSegments[pathSegments.length - 1]!
-            if (slug) await source.setMangaSlug(mangaId, slug)
-        } catch { /* invalid URL */ }
+            parsed = JSON.parse(data) as { series?: ApiSeriesDetail }
+        } catch {
+            throw new Error(`Failed to parse manga details (invalid JSON) for ${mangaId}`)
+        }
+
+        const comic = parsed.series
+        if (!comic) {
+            throw new Error(`Failed to parse manga details (missing series) for ${mangaId}`)
+        }
+
+        const titles: string[] = [comic.title.trim()]
+        if (comic.alt_titles?.length) {
+            for (const t of comic.alt_titles) {
+                const x = t.trim()
+                if (x && !titles.includes(x)) {
+                    titles.push(x)
+                }
+            }
+        } else if (comic.alternative_titles) {
+            titles.push(
+                ...comic.alternative_titles
+                    .split('•')
+                    .map((t) => t.trim())
+                    .filter(Boolean)
+                    .filter((t) => !titles.includes(t))
+            )
+        }
+
+        const $desc = source.cheerio.load(comic.description.trim(), { _useHtmlParser2: true })
+        const description = this.decodeHTMLEntity(
+            $desc.text().replace(/\r\n/gm, '\n')
+        )
 
         const rawStatus = comic.status.trim().toLowerCase()
         let status: string
@@ -121,7 +125,8 @@ export class AsuraScansParser {
                 break
         }
 
-        const tags: Tag[] = comic.genres.map((g) =>
+        const genres = Array.isArray(comic.genres) ? comic.genres : []
+        const tags: Tag[] = genres.map((g) =>
             App.createTag({ id: `genres:${g.id}`, label: g.name })
         )
 
@@ -133,15 +138,18 @@ export class AsuraScansParser {
             })
         ]
 
+        const author = comic.author?.trim() || 'Unknown'
+        const artist = comic.artist?.trim() || 'Unknown'
+
         return App.createSourceManga({
             id: mangaId,
             mangaInfo: App.createMangaInfo({
                 titles,
-                image: comic.coverUrl || source.fallbackImage,
-                covers: [comic.coverUrl],
+                image: comic.cover || source.fallbackImage,
+                covers: [comic.cover],
                 status,
-                //author: comic.author ? comic.author.trim() : 'Unknown',
-                //artist: comic.artist ? comic.artist.trim() : 'Unknown',
+                author,
+                artist,
                 tags: tagSections,
                 desc: description,
                 rating: comic.rating
@@ -150,33 +158,20 @@ export class AsuraScansParser {
     }
 
     async parseChapterList(data: string, mangaId: string, source: any): Promise<Chapter[]> {
-        const $ = source.cheerio.load(data, { _useHtmlParser2: true })
-        const props = parseAstroIsland<AstroChapterListProps>(
-            $,
-            'r19',
-            `parse chapter list for manga ${mangaId}`
-        )
-        const list = props.chapters
+        let parsed: { data?: ApiChapterRow[] }
+        try {
+            parsed = JSON.parse(data) as { data?: ApiChapterRow[] }
+        } catch {
+            throw new Error(`Failed to parse chapter list (invalid JSON) for manga ${mangaId}`)
+        }
+
+        const list = parsed.data
         if (!Array.isArray(list) || list.length === 0) {
             throw new Error(`Failed to parse chapter list (empty chapters) for manga ${mangaId}`)
         }
 
-        const publicPath = (props.publicUrl ?? '')
-            .replace(/^\/+/, '')
-            .trim()
-        const seriesSlug = (props.seriesSlug ?? '').trim()
-
-        let mangaUrl = ''
-        if (publicPath && !publicPath.includes('/chapter/')) {
-            mangaUrl = publicPath
-            await source.setMangaSlug(mangaId, mangaUrl)
-        } else if (seriesSlug) {
-            mangaUrl = `comics/${seriesSlug}`
-            await source.setMangaSlug(mangaId, mangaUrl)
-        }
-
-        if (!mangaUrl) {
-            mangaUrl = await source.getMangaSlug(mangaId)
+        if (!list[0]!.series_slug?.trim()) {
+            throw new Error(`Could not resolve series slug for ${mangaId}`)
         }
 
         const chapters: Chapter[] = []
@@ -187,16 +182,9 @@ export class AsuraScansParser {
                 throw new Error(`Could not parse out ID when getting chapters for postId:${mangaId}`)
             }
 
-            const slug = chapter.slug?.trim()
-            if (!slug) {
-                throw new Error(`Could not parse chapter slug for manga ${mangaId} chapter ${id}`)
-            }
-
             const title = chapter.title?.trim()
             const publishedDate = chapter.published_at
-            const link = `${mangaUrl}/chapter/${slug}`
-
-            await source.stateManager.store(`${mangaId}:${id}`, link)
+            await source.stateManager.store(`${mangaId}:${id}`, String(chapter.number))
 
             chapters.push({
                 id,
@@ -217,13 +205,15 @@ export class AsuraScansParser {
         })
     }
 
-    parseChapterDetails($: CheerioStatic, mangaId: string, chapterId: string): ChapterDetails {
-        const props = parseAstroIsland<AstroChapterReaderProps>(
-            $,
-            'r1',
-            `parse chapter pages for ${mangaId}/${chapterId}`
-        )
-        const pageList = props.pages
+    parseChapterDetails(data: string, mangaId: string, chapterId: string): ChapterDetails {
+        let parsed: { data?: { chapter?: { pages?: { url: string }[] } } }
+        try {
+            parsed = JSON.parse(data) as { data?: { chapter?: { pages?: { url: string }[] } } }
+        } catch {
+            throw new Error(`Failed to parse chapter JSON for ${mangaId}/${chapterId}`)
+        }
+
+        const pageList = parsed.data?.chapter?.pages
         if (!Array.isArray(pageList) || pageList.length === 0) {
             throw new Error(`Failed to parse chapter pages (empty pages) for ${mangaId}/${chapterId}`)
         }
@@ -326,8 +316,6 @@ export class AsuraScansParser {
                 .trim()
             const mangaId: string = this.idCleaner(slug)
 
-            await source.setMangaSlug(mangaId, slug)
-
             results.push(App.createPartialSourceManga({
                 mangaId,
                 image: image || source.fallbackImage,
@@ -396,8 +384,6 @@ export class AsuraScansParser {
                 console.log(`Failed to parse homepage sections for ${source.baseUrl} title (${title}) mangaId (${mangaId})`)
                 continue
             }
-
-            await source.setMangaSlug(mangaId, href)
 
             items.push(App.createPartialSourceManga({
                 mangaId,

@@ -45,10 +45,10 @@ import {
 } from '@paperback/types/lib'
 
 const ASURASCANS_DOMAIN = 'https://asurascans.com'
-const ASURASCANS_API_DOMAIN = 'https://gg.asuracomic.net'
+const API_DOMAIN = 'https://api.asurascans.com'
 
 export const AsuraScansInfo: SourceInfo = {
-    version: '6.0.2',
+    version: '6.0.3',
     name: 'AsuraScans',
     description: 'Extension that pulls manga from AsuraScans',
     author: 'Seyden',
@@ -254,23 +254,10 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
         return this.mangaDataRequests[mangaId]?.data
     }
 
-    async getMangaSlug(mangaId: string): Promise<string> {
-        return await this.stateManager.retrieve(`${mangaId}:slug`)
-    }
-
-    async setMangaSlug(mangaId: string, link: string): Promise<void> {
-        await this.stateManager.store(`${mangaId}:slug`, link)
-    }
-
     //@ts-expect-error Force async function
     async getMangaShareUrl(mangaId: string): Promise<string> {
-        const slug = await this.getMangaSlug(mangaId)
-        if (!slug) {
-            throw new Error(`Couldn't find a url for mangaId ${mangaId}, try migrating the title or contact a developer!`)
-        }
-
         const url = await this.getBaseUrl()
-        return `${url}/${slug}`
+        return `${url}/comics/${mangaId}`
     }
 
     async getMangaData(mangaId: string): Promise<string> {
@@ -279,12 +266,12 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
     }
 
     async getMangaDetails(mangaId: string): Promise<SourceManga> {
-        const data = await this.getMangaRequest(mangaId)
+        const data = await this.loadRequestData(`${API_DOMAIN}/api/series/${encodeURIComponent(mangaId)}`)
         return await this.parser.parseMangaDetails(data, mangaId, this)
     }
 
     async getChapters(mangaId: string): Promise<Chapter[]> {
-        const data = await this.getMangaRequest(mangaId)
+        const data = await this.loadRequestData(`${API_DOMAIN}/api/series/${encodeURIComponent(mangaId)}/chapters`)
         const chapters = await this.parser.parseChapterList(data, mangaId, this)
         if (!Array.isArray(chapters) || chapters.length == 0) {
             throw new Error(`Couldn't find any chapters for mangaId ${mangaId}, throwing an error to prevent loosing reading progress`)
@@ -296,31 +283,32 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
     async getChapterSlug(mangaId: string, chapterId: string): Promise<string> {
         const chapterKey = `${mangaId}:${chapterId}`
         let existingMappedChapterLink = await this.stateManager.retrieve(chapterKey)
-        // If the Chapter List wasn't retrieved since the app was opened, retrieve it first and initialize it for all chapters
         if (existingMappedChapterLink == null) {
             await this.getChapters(mangaId)
+            existingMappedChapterLink = await this.stateManager.retrieve(chapterKey)
         }
 
-        existingMappedChapterLink = await this.stateManager.retrieve(chapterKey)
-        if (existingMappedChapterLink == null) {
+        if (existingMappedChapterLink != null && !/^\d+(\.\d+)?$/.test(existingMappedChapterLink.trim())) {
+            await this.getChapters(mangaId)
+            existingMappedChapterLink = await this.stateManager.retrieve(chapterKey)
+        }
+
+        if (existingMappedChapterLink == null || !/^\d+(\.\d+)?$/.test(existingMappedChapterLink.trim())) {
             throw new Error(`Could not parse out Chapter Link when getting chapter details for postId: ${mangaId} chapterId: ${chapterId}`)
         }
 
-        return existingMappedChapterLink
+        return existingMappedChapterLink.trim()
     }
 
     async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
-        const chapterLink: string = await this.getChapterSlug(mangaId, chapterId)
-        const url: string = await this.getBaseUrl()
-        const data = await this.loadRequestData(`${url}/${chapterLink}/`)
-        const $ = this.cheerio.load(data, { _useHtmlParser2: true })
-
-        return this.parser.parseChapterDetails($, mangaId, chapterId)
+        const chapterLink = await this.getChapterSlug(mangaId, chapterId)
+        const data = await this.loadRequestData(`${API_DOMAIN}/api/series/${encodeURIComponent(mangaId)}/chapters/${encodeURIComponent(chapterLink)}`)
+        return this.parser.parseChapterDetails(data, mangaId, chapterId)
     }
 
     async getSearchTags(): Promise<TagSection[]> {
         try {
-            const data = await this.loadRequestData('https://api.asurascans.com/api/genres')
+            const data = await this.loadRequestData(`${API_DOMAIN}/api/genres`)
             const { data: genres } = JSON.parse(data) as { data: any[] }
             return this.parser.parseTags(genres)
         } catch (error) {
