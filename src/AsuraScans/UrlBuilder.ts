@@ -1,68 +1,39 @@
+type QueryParameter = string | string[] | undefined
+
+interface BuildUrlOptions {
+    addTrailingSlash?: boolean
+}
+
 export class URLBuilder {
-    parameters: Record<string, any | any[]> = {}
-    pathComponents: string[] = []
-    baseUrl: string
+    private readonly parameters: Record<string, QueryParameter> = {}
+    private readonly pathComponents: string[] = []
+    private readonly baseUrl: string
 
     constructor(baseUrl: string) {
-        this.baseUrl = baseUrl.replace(/(^\/)?(?=.*)(\/$)?/gim, '')
+        this.baseUrl = baseUrl.replace(/\/$/, '')
     }
 
     addPathComponent(component: string): URLBuilder {
-        this.pathComponents.push(component.replace(/(^\/)?(?=.*)(\/$)?/gim, ''))
+        this.pathComponents.push(component.replace(/^\/+|\/+$/g, ''))
         return this
     }
 
-    addQueryParameter(key: string, value: any | any[]): URLBuilder {
-        if (Array.isArray(value) && !value.length) {
-            return this
-        }
-
-        const array = (this.parameters[key] as any[])
-        if (array?.length) {
-            array.push(value)
-        } else {
+    addQueryParameter(key: string, value: QueryParameter): URLBuilder {
+        if (value !== undefined && value !== '' && (!Array.isArray(value) || value.length > 0)) {
             this.parameters[key] = value
         }
         return this
     }
 
-    buildUrl({
-        addTrailingSlash,
-        includeUndefinedParameters
-    } = {
-        addTrailingSlash: false,
-        includeUndefinedParameters: false
-    }): string {
-        let finalUrl = this.baseUrl + '/'
+    buildUrl(options: BuildUrlOptions = {}): string {
+        const path = this.pathComponents.filter(Boolean).join('/')
+        const trailingSlash = options.addTrailingSlash ? '/' : ''
+        const query = Object.entries(this.parameters)
+            .map(([key, value]) => `${key}=${Array.isArray(value) ? value.join(',') : value}`)
+            .join('&')
 
-        finalUrl += this.pathComponents.join('/')
-        finalUrl += addTrailingSlash
-                    ? '/'
-                    : ''
-        finalUrl += Object.values(this.parameters).length > 0
-                    ? '?'
-                    : ''
-        finalUrl += Object.entries(this.parameters).map(entry => {
-            if (!entry[1] && !includeUndefinedParameters) {
-                return undefined
-            }
+        const queryPrefix = query ? '?' : ''
 
-            if (Array.isArray(entry[1]) && entry[1].length) {
-                return `${entry[0]}=${entry[1].map(value => value || includeUndefinedParameters
-                                             ? value
-                                             : undefined)
-                               .filter(x => x !== undefined)
-                               .join(',')}`
-            }
-
-            if (typeof entry[1] === 'object') {
-                return Object.keys(entry[1]).map(key => `${entry[0]}[${key}]=${entry[1][key]}`)
-                             .join('&')
-            }
-
-            return `${entry[0]}=${entry[1]}`
-        }).filter(x => x !== undefined).join('&')
-
-        return finalUrl
+        return `${this.baseUrl}/${path}${trailingSlash}${queryPrefix}${query}`
     }
 }

@@ -17,24 +17,24 @@ import {
     SourceInfo,
     SourceIntents,
     SourceManga,
-    Tag,
     TagSection
 } from '@paperback/types'
 
 import { parse } from 'url'
 
+import { AsuraScansApi } from './AsuraScansApi'
 import { AsuraScansParser } from './AsuraScansParser'
-import { URLBuilder } from './UrlBuilder'
 import {
-    createHomeSection,
-    DefaultHomeSectionData,
     getFilterTagsBySection,
     getIncludedTagBySection,
-    HomeSectionData,
     isImgLink
 } from './AsuraScansHelper'
 
 import {
+    ApiPaginationMeta,
+    HomeSectionDefinition,
+    PageMetadata,
+    SeriesQueryOptions,
     StatusTypes
 } from './AsuraScansInterfaces'
 
@@ -45,10 +45,51 @@ import {
 } from '@paperback/types/lib'
 
 const ASURASCANS_DOMAIN = 'https://asurascans.com'
-const API_DOMAIN = 'https://api.asurascans.com'
+const SERIES_PAGE_LIMIT = 20
+const HOME_SECTION_DEFINITIONS: HomeSectionDefinition[] = [
+    {
+        id: 'trending',
+        title: 'Trending',
+        type: HomeSectionType.singleRowLarge,
+        containsMoreItems: false,
+        kind: 'trending',
+        period: 'trending'
+    },
+    {
+        id: 'latest_updates',
+        title: 'Latest Updates',
+        type: HomeSectionType.singleRowNormal,
+        containsMoreItems: true,
+        kind: 'latest'
+    },
+    {
+        id: 'weekly',
+        title: 'Weekly',
+        type: HomeSectionType.singleRowNormal,
+        containsMoreItems: false,
+        kind: 'trending',
+        period: 'week'
+    },
+    {
+        id: 'monthly',
+        title: 'Monthly',
+        type: HomeSectionType.singleRowNormal,
+        containsMoreItems: false,
+        kind: 'trending',
+        period: 'month'
+    },
+    {
+        id: 'all_time',
+        title: 'All Time',
+        type: HomeSectionType.singleRowNormal,
+        containsMoreItems: false,
+        kind: 'trending',
+        period: 'all'
+    }
+]
 
 export const AsuraScansInfo: SourceInfo = {
-    version: '6.0.3',
+    version: '6.0.5',
     name: 'AsuraScans',
     description: 'Extension that pulls manga from AsuraScans',
     author: 'Seyden',
@@ -159,6 +200,8 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
         }
     })
 
+    api = new AsuraScansApi(this.requestManager, ASURASCANS_DOMAIN)
+
     /**
      * The URL of the website. Eg. https://mangadark.com without a trailing slash
      */
@@ -175,22 +218,10 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
     language = '🇬🇧'
 
     /**
-     * The pathname between the domain and the manga.
-     * Eg. https://mangadark.com/manga/mashle-magic-and-muscles the pathname would be "manga"
-     * Default = "manga"
-     */
-    sourceTraversalPathName = 'browse'
-
-    /**
      * Fallback image if no image is present
      * Default = "https://i.imgur.com/GYUxEX8.png"
      */
     fallbackImage = 'https://i.imgur.com/GYUxEX8.png'
-
-    /**
-     * Some websites have the Cloudflare defense check enabled on specific parts of the website, these need to be loaded when using the Cloudflare bypass within the app
-     */
-    bypassPage = ''
 
     // ----MANGA DETAILS SELECTORS----
 
@@ -203,76 +234,14 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
         DROPPED: 'DROPPED'
     }
 
-    // ----HOMESCREEN SELECTORS----
-
-    sections: Record<'trending_today' | 'latest_update', HomeSectionData> = {
-        'trending_today': {
-            ...DefaultHomeSectionData,
-            section: createHomeSection('trending_today', 'Trending Today', false, HomeSectionType.singleRowLarge),
-            selectorFunc: ($: CheerioStatic) => $('div.embla-trending__slide', $('h2:contains(Trending Today)')?.parent()?.next()?.next()),
-            titleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span.block', element).text().trim(),
-            subtitleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span.block', element)?.next()?.first()?.text().trim(),
-            sortIndex: 10
-        },
-        'latest_update': {
-            ...DefaultHomeSectionData,
-            section: createHomeSection('latest_update', 'Latest Updates', false),
-            selectorFunc: ($: CheerioStatic) => $('div.grid', $("h2:contains(Latest Updates)").parent().next()),
-            titleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('a.text-base', element).first().text().trim(),
-            subtitleSelectorFunc: ($: CheerioStatic, element: CheerioElement) => $('span.font-medium', element).first().text().trim(),
-            getViewMoreItemsFunc: (page: string) => `page/${page}`,
-            sortIndex: 20
-        }
-    }
-
-    // Ugly workaround to fasten up migrations and updates, paperback doesnt support any other way for not double requesting
-    mangaDataRequests: { [Key: string]: { expires: number, data: Promise<string> } } = {}
-
-    async getMangaRequest(mangaId: string): Promise<string> {
-        const request = this.mangaDataRequests[mangaId]
-        if (request && request.expires > Date.now()) {
-            return request.data
-        }
-
-        for (const key in this.mangaDataRequests) {
-            const tempRequest = this.mangaDataRequests[key]
-            if (tempRequest?.expires && tempRequest.expires < Date.now()) {
-                delete this.mangaDataRequests[key]
-            }
-        }
-
-        this.mangaDataRequests[mangaId] = {
-            expires: Date.now() + 5000,
-            data: new Promise<string>((resolve, reject) => {
-                this.getMangaData(mangaId)
-                    .then((result) => resolve(result))
-                    .catch((e) => reject(e))
-            })
-        }
-
-
-        return this.mangaDataRequests[mangaId]?.data
-    }
-
-    //@ts-expect-error Force async function
-    async getMangaShareUrl(mangaId: string): Promise<string> {
-        const url = await this.getBaseUrl()
-        return `${url}/comics/${mangaId}`
-    }
-
-    async getMangaData(mangaId: string): Promise<string> {
-        const url = await this.getMangaShareUrl(mangaId)
-        return await this.loadRequestData(url)
-    }
-
     async getMangaDetails(mangaId: string): Promise<SourceManga> {
-        const data = await this.loadRequestData(`${API_DOMAIN}/api/series/${encodeURIComponent(mangaId)}`)
-        return await this.parser.parseMangaDetails(data, mangaId, this)
+        const response = await this.api.getSeries(mangaId)
+        return this.parser.parseMangaDetails(response, mangaId, this)
     }
 
     async getChapters(mangaId: string): Promise<Chapter[]> {
-        const data = await this.loadRequestData(`${API_DOMAIN}/api/series/${encodeURIComponent(mangaId)}/chapters`)
-        const chapters = await this.parser.parseChapterList(data, mangaId, this)
+        const response = await this.api.getChapters(mangaId)
+        const chapters = await this.parser.parseChapterList(response, mangaId, this)
         if (!Array.isArray(chapters) || chapters.length == 0) {
             throw new Error(`Couldn't find any chapters for mangaId ${mangaId}, throwing an error to prevent loosing reading progress`)
         }
@@ -302,23 +271,18 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
 
     async getChapterDetails(mangaId: string, chapterId: string): Promise<ChapterDetails> {
         const chapterLink = await this.getChapterSlug(mangaId, chapterId)
-        const data = await this.loadRequestData(`${API_DOMAIN}/api/series/${encodeURIComponent(mangaId)}/chapters/${encodeURIComponent(chapterLink)}`)
-        return this.parser.parseChapterDetails(data, mangaId, chapterId)
+        const response = await this.api.getChapterDetails(mangaId, chapterLink)
+        return this.parser.parseChapterDetails(response, mangaId, chapterId)
     }
 
     async getSearchTags(): Promise<TagSection[]> {
-        try {
-            const data = await this.loadRequestData(`${API_DOMAIN}/api/genres`)
-            const { data: genres } = JSON.parse(data) as { data: any[] }
-            return this.parser.parseTags(genres)
-        } catch (error) {
-            throw new Error(error as any)
-        }
+        const response = await this.api.getGenres()
+        return this.parser.parseTags(response.data)
     }
 
-    async getSearchResults(query: SearchRequest, metadata: any): Promise<PagedResults> {
+    async getSearchResults(query: SearchRequest, metadata: PageMetadata | undefined): Promise<PagedResults> {
         let result: {
-            metadata: any;
+            metadata: PageMetadata | undefined
             manga: PartialSourceManga[]
         }
         let manga: PartialSourceManga[] = []
@@ -328,8 +292,9 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
             metadata = result.metadata
             manga = result.manga
 
-            if (metadata == undefined)
+            if (metadata == undefined) {
                 break
+            }
         }
 
         return App.createPagedResults({
@@ -338,48 +303,34 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
         })
     }
 
-    private async search(metadata: any, query: SearchRequest) {
+    private async search(metadata: PageMetadata | undefined, query: SearchRequest) {
         const page: number = metadata?.page ?? 1
+        const offset = (page - 1) * SERIES_PAGE_LIMIT
+        const response = await this.api.getSeriesPage(this.createSeriesQuery(page, query))
+        const results = this.parser.parseSeriesItems(response.data, this.fallbackImage)
+        metadata = this.getNextPageMetadata(page, offset, SERIES_PAGE_LIMIT, response.data.length, response.meta)
 
-        const request = await this.constructSearchRequest(page, query)
-        const response = await this.requestManager.schedule(request, 1)
-        this.checkResponseErrors(response)
-        const $ = this.cheerio.load(response.data as string, { _useHtmlParser2: true })
-        const results = await this.parser.parseSearchResults($, this)
-
-        metadata = !this.parser.isLastPage($, query?.title ? 'search_request' : 'view_more')
-            ? { page: page + 1 }
-            : undefined
         return {
             metadata,
             manga: results
         }
     }
 
-    async constructSearchRequest(page: number, query: SearchRequest): Promise<any> {
-        const url: string = await this.getBaseUrl()
-        let urlBuilder: URLBuilder = new URLBuilder(url)
-            .addPathComponent(this.sourceTraversalPathName)
-            .addQueryParameter('page', page.toString())
+    private createSeriesQuery(page: number, query: SearchRequest): SeriesQueryOptions {
+        const offset = (page - 1) * SERIES_PAGE_LIMIT
+        const sort = getIncludedTagBySection('order', query?.includedTags)
 
-        if (query?.title) {
-            urlBuilder = urlBuilder.addQueryParameter('search', encodeURIComponent(query?.title.replace(/[’‘´`'-][a-z]*/g, '%') ?? ''))
+        return {
+            limit: SERIES_PAGE_LIMIT,
+            offset,
+            search: query.title?.replace(/[’‘´`'-][a-z]*/g, '%'),
+            genres: getFilterTagsBySection('genres', query?.includedTags),
+            status: getIncludedTagBySection('status', query?.includedTags),
+            type: getIncludedTagBySection('type', query?.includedTags),
+            sort: sort || 'latest',
+            order: 'desc',
+            minChapters: getIncludedTagBySection('chapters', query?.includedTags)
         }
-
-        urlBuilder = urlBuilder
-            .addQueryParameter('genres', getFilterTagsBySection('genres', query?.includedTags))
-            .addQueryParameter('status', getIncludedTagBySection('status', query?.includedTags))
-            .addQueryParameter('type', getIncludedTagBySection('type', query?.includedTags))
-            .addQueryParameter('sort', getIncludedTagBySection('order', query?.includedTags))
-            .addQueryParameter('min_chapters', getIncludedTagBySection('chapters', query?.includedTags))
-
-        return App.createRequest({
-            url: urlBuilder.buildUrl({
-                addTrailingSlash: false,
-                includeUndefinedParameters: false
-            }),
-            method: 'GET'
-        })
     }
 
     async supportsTagExclusion(): Promise<boolean> {
@@ -387,88 +338,94 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
     }
 
     async getHomePageSections(sectionCallback: (section: HomeSection) => void): Promise<void> {
-        const url: string = await this.getBaseUrl()
-        const $ = await this.loadCheerioData(`${url}/`)
+        const sections = HOME_SECTION_DEFINITIONS.map((definition) => ({
+            definition,
+            section: App.createHomeSection({
+                id: definition.id,
+                title: definition.title,
+                type: definition.type,
+                containsMoreItems: definition.containsMoreItems
+            })
+        }))
 
-        const promises: Promise<void>[] = []
-        const sectionValues = Object.values(this.sections).sort((n1, n2) => n1.sortIndex - n2.sortIndex)
-        for (const section of sectionValues) {
-            if (!section.enabled) {
-                continue
-            }
-            // Let the app load empty sections
-            sectionCallback(section.section)
+        for (const { section } of sections) {
+            sectionCallback(section)
         }
 
-        for (const section of sectionValues) {
-            if (!section.enabled) {
-                continue
-            }
-
-            promises.push(
-                new Promise<void>((resolve) => {
-                    this.parser.parseHomeSection($, section, this)
-                        .then((items) => {
-                            section.section.items = items
-                            sectionCallback(section.section)
-                            resolve()  // Resolve once the work is done
-                        })
-                        .catch((error) => {
-                            throw new Error(error)
-                        })
-                })
-            )
-
-        }
-
-        // Make sure the function completes
-        await Promise.all(promises)
+        await Promise.all(sections.map(async ({ definition, section }) => {
+            section.items = await this.loadHomeSectionItems(definition)
+            sectionCallback(section)
+        }))
     }
 
-    async getViewMoreItems(homepageSectionId: string, metadata: any): Promise<PagedResults> {
-        throw new Error('Not implemented yet!')
-
-        /*const page: number = metadata?.page ?? 1
-
-        // @ts-ignore
-        const param = this.sections[homepageSectionId].getViewMoreItemsFunc(page) ?? undefined
-        if (!param) {
+    async getViewMoreItems(homepageSectionId: string, metadata: PageMetadata | undefined): Promise<PagedResults> {
+        if (homepageSectionId !== 'latest_updates') {
             throw new Error(`Invalid homeSectionId | ${homepageSectionId}`)
         }
 
-        const url: string = await this.getAndSetBaseUrl()
-        const $ = await this.loadCheerioData(`${url}/${param}`)
-
-        const items: PartialSourceManga[] = await this.parser.parseViewMore($, this)
-        metadata = !this.parser.isLastPage($, 'view_more')
-                   ? { page: page + 1 }
-                   : undefined
+        const page: number = metadata?.page ?? 1
+        const { offset, response } = await this.loadLatestUpdatesPage(page)
 
         return App.createPagedResults({
-            results: items,
-            metadata
-        })*/
+            results: this.parser.parseSeriesItems(response.data, this.fallbackImage),
+            metadata: this.getNextPageMetadata(
+                page,
+                offset,
+                SERIES_PAGE_LIMIT,
+                response.data.length,
+                response.meta
+            )
+        })
     }
 
-    async loadRequestData(url: string, method = 'GET'): Promise<string> {
-        const request = App.createRequest({
-            url,
-            method
+    private async loadHomeSectionItems(definition: HomeSectionDefinition): Promise<PartialSourceManga[]> {
+        switch (definition.kind) {
+            case 'latest': {
+                const { response } = await this.loadLatestUpdatesPage(1)
+                return this.parser.parseSeriesItems(response.data, this.fallbackImage)
+            }
+            case 'trending': {
+                const response = await this.api.getTrending(definition.period)
+                return this.parser.parseTrendingItems(response.data, this.fallbackImage)
+            }
+        }
+    }
+
+    private async loadLatestUpdatesPage(page: number) {
+        const offset = (page - 1) * SERIES_PAGE_LIMIT
+        const response = await this.api.getSeriesPage({
+            limit: SERIES_PAGE_LIMIT,
+            offset,
+            sort: 'latest',
+            order: 'desc'
         })
 
-        const response = await this.requestManager.schedule(request, 1)
-        this.checkResponseErrors(response)
-        return response.data as string
+        return { offset, response }
     }
 
-    async loadCheerioData(url: string, method = 'GET'): Promise<CheerioStatic> {
-        return this.cheerio.load(await this.loadRequestData(url, method), { _useHtmlParser2: true })
+    private getNextPageMetadata(
+        page: number,
+        offset: number,
+        limit: number,
+        itemCount: number,
+        meta: ApiPaginationMeta | undefined
+    ): PageMetadata | undefined {
+        let hasMore: boolean
+        if (typeof meta?.has_more === 'boolean') {
+            hasMore = meta.has_more
+        } else if (typeof meta?.total === 'number') {
+            hasMore = offset + itemCount < meta.total
+        } else {
+            hasMore = itemCount >= limit
+        }
+
+        return hasMore ? { page: page + 1 } : undefined
     }
 
     async getCloudflareBypassRequestAsync(): Promise<Request> {
         const url: string = await this.getBaseUrl()
         return App.createRequest({
-            url: `${this.bypassPage || url}/`,
+            url: `${url}/`,
             method: 'GET',
             headers: {
                 'referer': `${url}/`,
@@ -478,14 +435,4 @@ export class AsuraScans implements ChapterProviding, HomePageSectionsProviding, 
         })
     }
 
-    checkResponseErrors(response: Response): void {
-        const status = response.status
-        switch (status) {
-            case 403:
-            case 503:
-                throw new Error(`CLOUDFLARE BYPASS ERROR:\\nPlease go to the homepage of <${this.baseUrl}> and press the cloud icon.`)
-            case 404:
-                throw new Error(`The requested page ${response.request.url} was not found!`)
-        }
-    }
 }

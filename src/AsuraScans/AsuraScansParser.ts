@@ -6,15 +6,22 @@ import {
     Tag,
     TagSection
 } from '@paperback/types'
+import { SourceStateManager } from '@paperback/types/lib'
 
 import {
-    HomeSectionData
-} from './AsuraScansHelper'
+    ApiChapter,
+    ApiChapterDetailsResponse,
+    ApiCollectionResponse,
+    ApiGenre,
+    ApiSeriesDetailResponse,
+    ApiSeriesItem,
+    ApiTrendingItem,
+    StatusTypes
+} from './AsuraScansInterfaces'
 
 import entities = require('entities')
 
 export const browseFilterStatuses = [
-    { value: 'all', label: 'All' },
     { value: 'ongoing', label: 'Ongoing' },
     { value: 'completed', label: 'Completed' },
     { value: 'hiatus', label: 'Hiatus' },
@@ -22,56 +29,42 @@ export const browseFilterStatuses = [
 ]
 
 export const browseFilterTypes = [
-    { value: 'all', label: 'All' },
     { value: 'manhwa', label: 'Manhwa' },
     { value: 'manhua', label: 'Manhua' },
     { value: 'manga', label: 'Mangatoon' }
 ]
 
 export const browseFilterOrder = [
-    { value: 'update', label: 'Latest Update' },
+    { value: 'latest', label: 'Latest Update' },
     { value: 'popular', label: 'Popular' },
     { value: 'rating', label: 'Rating' },
-    { value: 'name', label: 'A-Z' },
+    { value: 'title', label: 'A-Z' },
     { value: 'newest', label: 'Newest' }
 ]
 
-/** `GET /api/series/:slug` — `series` object (see [api.asurascans.com](https://api.asurascans.com/api/series/nano-machine)). */
-interface ApiSeriesDetail {
-    id: number
-    slug: string
-    title: string
-    alt_titles?: string[]
-    alternative_titles?: string
-    description: string
-    cover: string
-    status: string
-    author?: string
-    artist?: string
-    rating: number
-    genres: { id: number; name: string; slug: string }[]
+interface FilterTagItem {
+    id?: number | string
+    value?: string
+    name?: string
+    label?: string
 }
 
-/** `GET /api/series/:slug/chapters` — each element of `data` ([example](https://api.asurascans.com/api/series/nano-machine/chapters)). */
-interface ApiChapterRow {
-    id: number
-    slug: string
-    number: number
-    title?: string
-    published_at: string
-    series_slug: string
+interface MangaParserContext {
+    cheerio: {
+        load(html: string, options: { _useHtmlParser2: boolean }): { text(): string }
+    }
+    fallbackImage: string
+    manga_StatusTypes: StatusTypes
+}
+
+interface ChapterParserContext {
+    language: string
+    stateManager: SourceStateManager
 }
 
 export class AsuraScansParser {
-    async parseMangaDetails(data: string, mangaId: string, source: any): Promise<SourceManga> {
-        let parsed: { series?: ApiSeriesDetail }
-        try {
-            parsed = JSON.parse(data) as { series?: ApiSeriesDetail }
-        } catch {
-            throw new Error(`Failed to parse manga details (invalid JSON) for ${mangaId}`)
-        }
-
-        const comic = parsed.series
+    async parseMangaDetails(response: ApiSeriesDetailResponse, mangaId: string, source: MangaParserContext): Promise<SourceManga> {
+        const comic = response.series
         if (!comic) {
             throw new Error(`Failed to parse manga details (missing series) for ${mangaId}`)
         }
@@ -84,14 +77,6 @@ export class AsuraScansParser {
                     titles.push(x)
                 }
             }
-        } else if (comic.alternative_titles) {
-            titles.push(
-                ...comic.alternative_titles
-                    .split('•')
-                    .map((t) => t.trim())
-                    .filter(Boolean)
-                    .filter((t) => !titles.includes(t))
-            )
         }
 
         const $desc = source.cheerio.load(comic.description.trim(), { _useHtmlParser2: true })
@@ -157,20 +142,13 @@ export class AsuraScansParser {
         })
     }
 
-    async parseChapterList(data: string, mangaId: string, source: any): Promise<Chapter[]> {
-        let parsed: { data?: ApiChapterRow[] }
-        try {
-            parsed = JSON.parse(data) as { data?: ApiChapterRow[] }
-        } catch {
-            throw new Error(`Failed to parse chapter list (invalid JSON) for manga ${mangaId}`)
-        }
-
-        const list = parsed.data
+    async parseChapterList(response: ApiCollectionResponse<ApiChapter>, mangaId: string, source: ChapterParserContext): Promise<Chapter[]> {
+        const list = response.data
         if (!Array.isArray(list) || list.length === 0) {
             throw new Error(`Failed to parse chapter list (empty chapters) for manga ${mangaId}`)
         }
 
-        if (!list[0]!.series_slug?.trim()) {
+        if (!list[0]?.series_slug?.trim()) {
             throw new Error(`Could not resolve series slug for ${mangaId}`)
         }
 
@@ -180,6 +158,10 @@ export class AsuraScansParser {
             const id = chapter.id?.toString()
             if (!id) {
                 throw new Error(`Could not parse out ID when getting chapters for postId:${mangaId}`)
+            }
+
+            if (chapter.is_locked || chapter.is_premium) {
+                continue
             }
 
             const title = chapter.title?.trim()
@@ -205,15 +187,8 @@ export class AsuraScansParser {
         })
     }
 
-    parseChapterDetails(data: string, mangaId: string, chapterId: string): ChapterDetails {
-        let parsed: { data?: { chapter?: { pages?: { url: string }[] } } }
-        try {
-            parsed = JSON.parse(data) as { data?: { chapter?: { pages?: { url: string }[] } } }
-        } catch {
-            throw new Error(`Failed to parse chapter JSON for ${mangaId}/${chapterId}`)
-        }
-
-        const pageList = parsed.data?.chapter?.pages
+    parseChapterDetails(response: ApiChapterDetailsResponse, mangaId: string, chapterId: string): ChapterDetails {
+        const pageList = response.data?.chapter?.pages
         if (!Array.isArray(pageList) || pageList.length === 0) {
             throw new Error(`Failed to parse chapter pages (empty pages) for ${mangaId}/${chapterId}`)
         }
@@ -230,7 +205,7 @@ export class AsuraScansParser {
         })
     }
 
-    parseTags(genres: any[]): TagSection[] {
+    parseTags(genres: ApiGenre[]): TagSection[] {
 
         // Predefined chapters tags
         const predefinedChaptersTags: Tag[] = [
@@ -249,8 +224,8 @@ export class AsuraScansParser {
             { id: 'chapters:250', label: '+250' }
         ]
 
-        const createTags = (filterItems: any, prefix: string): Tag[] => {
-            return filterItems.map((item: { id: any; value: any; name: any; label: any }) => ({
+        const createTags = (filterItems: FilterTagItem[], prefix: string): Tag[] => {
+            return filterItems.map((item) => ({
                 id: `${prefix}:${item.id ?? item.value}`,
                 label: item.name ?? item.label ?? ''
             }))
@@ -291,147 +266,33 @@ export class AsuraScansParser {
         return tagSections
     }
 
-    async parseSearchResults($: CheerioSelector, source: any): Promise<PartialSourceManga[]> {
-        const results: PartialSourceManga[] = []
-
-        const cards = $('div.series-card')
-        if (!cards.length) {
-            console.log('Unable to parse search results!')
-            return results
-        }
-
-        for (const card of cards.toArray()) {
-            const $card = $(card)
-            const linkEl = $('a', $card)
-            const slug = linkEl.attr('href') ?? ''
-            if (!slug) {
-                continue
-            }
-
-            const image = this.getImageSrc($('img', $card))
-            const title = $card.find('h3').first().text().trim()
-            const subtitle = $card.find('.text-xs').first().text()
-                .replace(/\s*Chapters\s*/gi, '')
-                .replace(/\s+/g, ' ')
-                .trim()
-            const mangaId: string = this.idCleaner(slug)
-
-            results.push(App.createPartialSourceManga({
-                mangaId,
-                image: image || source.fallbackImage,
-                title: this.decodeHTMLEntity(title),
-                subtitle: this.decodeHTMLEntity(subtitle)
-            }))
-        }
-
-        return results
+    parseSeriesItems(items: ApiSeriesItem[], fallbackImage: string): PartialSourceManga[] {
+        return items.map((item) => {
+            const latestChapter = item.latest_chapters?.[0]
+            const subtitle = latestChapter
+                ? `Chapter ${latestChapter.number}${latestChapter.is_premium ? ' 🔒' : ''}`
+                : ''
+            return App.createPartialSourceManga({
+                mangaId: item.slug,
+                image: item.cover || fallbackImage,
+                title: this.decodeHTMLEntity(item.title),
+                subtitle
+            })
+        })
     }
 
-    async parseViewMore($: CheerioStatic, source: any): Promise<PartialSourceManga[]> {
-        const items: PartialSourceManga[] = []
-
-        for (const manga of $('div.bs', 'div.listupd').toArray()) {
-            const title = $('a', manga).attr('title')
-            const image = this.getImageSrc($('img', manga))
-            const subtitle = $('div.epxs', manga).text().trim()
-
-            const slug: string = this.idCleaner($('a', manga).attr('href') ?? '')
-            const path: string = ($('a', manga).attr('href') ?? '').replace(/\/$/, '').split('/').slice(-2).shift() ?? ''
-            const postId = $('a', manga).attr('rel')
-            const mangaId: string = source.usePostIds
-                ? (isNaN(Number(postId))
-                    ? await source.slugToPostId(slug, path)
-                    : postId)
-                : slug
-
-            if (!mangaId || !title) {
-                console.log(`Failed to parse homepage sections for ${source.baseUrl}`)
-                continue
-            }
-
-            items.push(App.createPartialSourceManga({
-                mangaId,
-                image: image || source.fallbackImage,
-                title: this.decodeHTMLEntity(title),
-                subtitle: this.decodeHTMLEntity(subtitle)
-            }))
-        }
-
-        return items
-    }
-
-    async parseHomeSection($: CheerioStatic, section: HomeSectionData, source: any): Promise<PartialSourceManga[]> {
-        const items: PartialSourceManga[] = []
-
-        const mangas = section.selectorFunc($)
-        if (!mangas.length) {
-            console.log(`Unable to parse valid ${section.section.title} section!`)
-            return items
-        }
-
-        for (const manga of mangas.toArray()) {
-            const title = section.titleSelectorFunc($, manga)
-            if (!title) {
-                console.log(`Failed to parse homepage sections for ${source.baseUrl} title (${title})`)
-                continue
-            }
-            const image = this.getImageSrc($('img', manga))
-            const subtitle = section.subtitleSelectorFunc($, manga) ?? ''
-            const href = $('a', manga).attr('href') ?? ''
-            const mangaId: string = this.idCleaner(href ?? '')
-
-            if (!mangaId) {
-                console.log(`Failed to parse homepage sections for ${source.baseUrl} title (${title}) mangaId (${mangaId})`)
-                continue
-            }
-
-            items.push(App.createPartialSourceManga({
-                mangaId,
-                image: image || source.fallbackImage,
-                title: this.decodeHTMLEntity(title),
-                subtitle: this.decodeHTMLEntity(subtitle)
-            }))
-        }
-
-        return items
-    }
-
-    isLastPage = ($: CheerioStatic, _id: string): boolean => {
-        const nextPage = $('a[aria-label="Next page"]').first()
-        if (nextPage.length) {
-            const cls = nextPage.attr('class') ?? ''
-            const hasHref = !!nextPage.attr('href')
-            const disabled = cls.includes('pointer-events-none')
-            return !hasHref || disabled
-        }
-
-        const obj = $('a:contains(Next)')
-        const hasNext = obj.attr('style')?.includes('pointer-events:auto') ?? false
-        return !hasNext
-    }
-
-    protected getImageSrc(imageObj: Cheerio | undefined): string {
-        let image: string | undefined
-        const src = imageObj?.attr('src')
-        const dataLazy = imageObj?.attr('data-lazy-src')
-        const srcset = imageObj?.attr('srcset')
-        const dataSRC = imageObj?.attr('data-src')
-
-        if (typeof src != 'undefined' && !src?.startsWith('data')) {
-            image = src
-        } else if (typeof dataLazy != 'undefined' && !dataLazy?.startsWith('data')) {
-            image = dataLazy
-        } else if (typeof srcset != 'undefined' && !srcset?.startsWith('data')) {
-            image = srcset?.split(' ')[0] ?? ''
-        } else if (typeof dataSRC != 'undefined' && !dataSRC?.startsWith('data')) {
-            image = dataSRC
-        } else {
-            image = 'https://i.imgur.com/GYUxEX8.png'
-        }
-
-        image = image?.split('?resize')[0] ?? ''
-
-        return decodeURI(this.decodeHTMLEntity(image?.trim() ?? ''))
+    parseTrendingItems(items: ApiTrendingItem[], fallbackImage: string): PartialSourceManga[] {
+        return items.map((item) => {
+            const subtitle = item.latest_chapter_number != null
+                ? `Chapter ${item.latest_chapter_number}`
+                : ''
+            return App.createPartialSourceManga({
+                mangaId: item.slug,
+                image: item.cover_url || fallbackImage,
+                title: this.decodeHTMLEntity(item.title),
+                subtitle
+            })
+        })
     }
 
     protected decodeHTMLEntity(str: string): string {
@@ -439,19 +300,5 @@ export class AsuraScansParser {
             return ''
         }
         return entities.decodeHTML(str)
-    }
-
-    protected idCleaner(str: string): string {
-        let cleanId: string | null = str
-        cleanId = cleanId.replace(/\/$/, '')
-        cleanId = cleanId.split('/').pop() ?? null
-        // Remove randomised slug part
-        cleanId = cleanId?.substring(0, cleanId?.lastIndexOf('-')) ?? null
-
-        if (!cleanId) {
-            throw new Error(`Unable to parse id for ${str}`)
-        }
-
-        return cleanId
     }
 }
